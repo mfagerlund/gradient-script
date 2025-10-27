@@ -14,6 +14,39 @@ import {
 } from './AST.js';
 import { ExpressionTransformer } from './ExpressionTransformer.js';
 
+/**
+ * Serializes expressions to canonical string form for comparison
+ * This is a dedicated serializer that doesn't abuse the type system
+ */
+class ExpressionSerializer {
+  serialize(expr: Expression): string {
+    switch (expr.kind) {
+      case 'number':
+        return `num(${expr.value})`;
+
+      case 'variable':
+        return `var(${expr.name})`;
+
+      case 'binary':
+        const left = this.serialize(expr.left);
+        const right = this.serialize(expr.right);
+        return `bin(${expr.operator},${left},${right})`;
+
+      case 'unary':
+        const operand = this.serialize(expr.operand);
+        return `un(${expr.operator},${operand})`;
+
+      case 'call':
+        const args = expr.args.map(arg => this.serialize(arg)).join(',');
+        return `call(${expr.name},${args})`;
+
+      case 'component':
+        const object = this.serialize(expr.object);
+        return `comp(${object},${expr.component})`;
+    }
+  }
+}
+
 export interface CSEResult {
   intermediates: Map<string, Expression>;
   simplified: Expression;
@@ -115,43 +148,6 @@ function shouldExtract(expr: Expression): boolean {
   }
 }
 
-/**
- * Serializes expressions to canonical string form for comparison
- */
-class ExpressionSerializer extends ExpressionTransformer {
-  serialize(expr: Expression): string {
-    return this.transform(expr) as any;
-  }
-
-  protected visitNumber(node: NumberLiteral): Expression {
-    return `num(${node.value})` as any;
-  }
-
-  protected visitVariable(node: Variable): Expression {
-    return `var(${node.name})` as any;
-  }
-
-  protected visitBinaryOp(node: BinaryOp): Expression {
-    const left = this.transform(node.left);
-    const right = this.transform(node.right);
-    return `bin(${node.operator},${left},${right})` as any;
-  }
-
-  protected visitUnaryOp(node: UnaryOp): Expression {
-    const operand = this.transform(node.operand);
-    return `un(${node.operator},${operand})` as any;
-  }
-
-  protected visitFunctionCall(node: FunctionCall): Expression {
-    const args = node.args.map(arg => this.transform(arg)).join(',');
-    return `call(${node.name},${args})` as any;
-  }
-
-  protected visitComponentAccess(node: ComponentAccess): Expression {
-    const object = this.transform(node.object);
-    return `comp(${object},${node.component})` as any;
-  }
-}
 
 /**
  * Counts occurrences of subexpressions during traversal

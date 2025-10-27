@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { parseAndCompile } from '../helpers.js';
 import { parse } from '../../src/dsl/Parser.js';
 import { inferFunction } from '../../src/dsl/TypeInference.js';
 import { computeFunctionGradients } from '../../src/dsl/Differentiation.js';
@@ -18,16 +19,12 @@ describe('Code Generation - Execution Tests', () => {
   }
 
   it('should generate executable code for simple scalar function', () => {
-    const input = `
+    const { func, env, gradients } = parseAndCompile(`
       function f(x∇) {
         return x * x
       }
-    `;
+    `);
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'f_grad');
@@ -38,16 +35,12 @@ describe('Code Generation - Execution Tests', () => {
   });
 
   it('should generate executable code with correct operator precedence', () => {
-    const input = `
+    const { func, env, gradients } = parseAndCompile(`
       function f(a∇, b∇, c∇, d∇) {
         return a / (c + d)
       }
-    `;
+    `);
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'f_grad');
@@ -60,16 +53,12 @@ describe('Code Generation - Execution Tests', () => {
   });
 
   it('should generate executable code for structured types', () => {
-    const input = `
+    const { func, env, gradients } = parseAndCompile(`
       function f(u∇: {x, y}) {
         return u.x * u.x + u.y * u.y
       }
-    `;
+    `);
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'f_grad');

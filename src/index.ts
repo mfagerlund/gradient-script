@@ -1,39 +1,39 @@
 /**
  * GradientScript - Symbolic differentiation for structured types
  *
- * This library provides symbolic differentiation capabilities for mathematical
- * expressions with structured types (Vec2, Vec3, custom types).
+ * This library provides automatic differentiation for functions with
+ * structured types (vectors, custom structures).
  */
 
-// AST nodes
+// Core API
+export { parse } from './dsl/Parser.js';
+export { inferFunction } from './dsl/TypeInference.js';
+export { computeFunctionGradients } from './dsl/Differentiation.js';
 export {
-  ASTNode,
-  ASTVisitor,
-  NumberNode,
-  VariableNode,
-  BinaryOpNode,
-  UnaryOpNode,
-  FunctionCallNode,
-  VectorAccessNode,
-  VectorConstructorNode,
-  Assignment,
-  Program,
-} from './symbolic/AST';
-
-// Parser
-export { Parser, parse } from './symbolic/Parser';
-
-// Differentiation
-export { differentiate, computeGradients } from './symbolic/SymbolicDiff';
-
-// Simplification
-export { simplify } from './symbolic/Simplify';
-
-// Code generation
-export {
-  generateCode,
-  generateMathNotation,
-  generateGradientCode,
+  generateComplete,
   generateGradientFunction,
-  CodeGenOptions,
-} from './symbolic/CodeGen';
+  type CodeGenOptions
+} from './dsl/CodeGen.js';
+
+// AST types
+export type {
+  Expression,
+  FunctionDef,
+  Program,
+  Parameter,
+  Assignment
+} from './dsl/AST.js';
+
+// Type system
+export type {
+  Type,
+  ScalarType,
+  StructType,
+  TypeEnv
+} from './dsl/Types.js';
+
+// Gradient verification utilities
+export type {
+  GradCheckResult,
+  GradCheckError
+} from './dsl/GradientChecker.js';

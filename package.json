@@ -2,8 +2,12 @@
   "name": "gradient-script",
   "version": "0.1.0",
   "description": "Symbolic differentiation for structured types with a simple DSL",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "gradient-script": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

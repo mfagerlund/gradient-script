@@ -2,7 +2,7 @@
  * Complete example: θ = atan2(u×v, u·v) gradient computation
  */
 
-import { parse, computeGradients, simplify, generateGradientCode, generateCode } from '../src/index';
+import { parse, computeGradients, simplify, generateGradientCode, generateCode } from '../dist/index.js';
 
 console.log('=== Gradient of θ = atan2(u×v, u·v) ===\n');
 

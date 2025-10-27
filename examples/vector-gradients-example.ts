@@ -5,7 +5,7 @@
  * Uses component-wise representation as mentioned in the plan.
  */
 
-import { parse, computeGradients, simplify, generateCode, generateGradientCode } from '../src/index';
+import { parse, computeGradients, simplify, generateCode, generateGradientCode } from '../dist/index.js';
 
 console.log('=== Vec2/Vec3 Symbolic Gradient Examples ===\n');
 

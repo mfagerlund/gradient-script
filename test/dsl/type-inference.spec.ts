@@ -123,7 +123,7 @@ describe('DSL Type Inference', () => {
 
     expect(() => {
       inferTypes(program);
-    }).toThrow(/Component 'w' does not exist/);
+    }).toThrow(/Component does not exist/);
   });
 
   it('should detect unknown function calls', () => {
@@ -137,7 +137,7 @@ describe('DSL Type Inference', () => {
 
     expect(() => {
       inferTypes(program);
-    }).toThrow(/Unknown function: unknown_func/);
+    }).toThrow(/Unknown function/);
   });
 
   it('should detect wrong argument types for built-in functions', () => {
@@ -151,7 +151,7 @@ describe('DSL Type Inference', () => {
 
     expect(() => {
       inferTypes(program);
-    }).toThrow(/No matching overload for dot2d/);
+    }).toThrow(/No matching overload/);
   });
 
   it('should infer types for 3D operations', () => {

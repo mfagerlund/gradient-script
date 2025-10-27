@@ -5,14 +5,28 @@
 
 import {
   Expression,
-  FunctionDef,
-  Variable,
-  BinaryOp,
-  UnaryOp,
-  FunctionCall,
-  ComponentAccess,
-  Assignment
+  FunctionDef
 } from './AST.js';
+import { ExpressionTransformer } from './ExpressionTransformer.js';
+
+/**
+ * Expression transformer that substitutes variables from a substitution map
+ * Handles recursive inlining by reprocessing substituted expressions
+ */
+class SubstitutionTransformer extends ExpressionTransformer {
+  constructor(private substitutions: Map<string, Expression>) {
+    super();
+  }
+
+  protected visitVariable(node: { kind: 'variable'; name: string }): Expression {
+    const replacement = this.substitutions.get(node.name);
+    if (replacement) {
+      // Recursively inline the replacement
+      return this.transform(replacement);
+    }
+    return node;
+  }
+}
 
 /**
  * Inline all intermediate variables in a function
@@ -28,52 +42,7 @@ export function inlineIntermediateVariables(func: FunctionDef): Expression {
     }
   }
 
-  // Inline return expression
-  return inlineExpression(func.returnExpr, substitutions);
-}
-
-/**
- * Recursively inline variables in an expression
- */
-function inlineExpression(expr: Expression, subs: Map<string, Expression>): Expression {
-  switch (expr.kind) {
-    case 'number':
-      return expr;
-
-    case 'variable':
-      // If variable has a substitution, inline it (recursively)
-      if (subs.has(expr.name)) {
-        return inlineExpression(subs.get(expr.name)!, subs);
-      }
-      return expr;
-
-    case 'binary':
-      return {
-        kind: 'binary',
-        operator: expr.operator,
-        left: inlineExpression(expr.left, subs),
-        right: inlineExpression(expr.right, subs)
-      };
-
-    case 'unary':
-      return {
-        kind: 'unary',
-        operator: expr.operator,
-        operand: inlineExpression(expr.operand, subs)
-      };
-
-    case 'call':
-      return {
-        kind: 'call',
-        name: expr.name,
-        args: expr.args.map(arg => inlineExpression(arg, subs))
-      };
-
-    case 'component':
-      return {
-        kind: 'component',
-        object: inlineExpression(expr.object, subs),
-        component: expr.component
-      };
-  }
+  // Use transformer to inline all variables
+  const transformer = new SubstitutionTransformer(substitutions);
+  return transformer.transform(func.returnExpr);
 }

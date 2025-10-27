@@ -9,8 +9,10 @@ import {
   BinaryOp,
   UnaryOp,
   ComponentAccess,
-  Variable
+  Variable,
+  NumberLiteral
 } from './AST.js';
+import { ExpressionTransformer } from './ExpressionTransformer.js';
 
 export interface CSEResult {
   intermediates: Map<string, Expression>;
@@ -114,65 +116,97 @@ function shouldExtract(expr: Expression): boolean {
 }
 
 /**
- * Count occurrences of each subexpression
+ * Serializes expressions to canonical string form for comparison
  */
-class ExpressionCounter {
+class ExpressionSerializer extends ExpressionTransformer {
+  serialize(expr: Expression): string {
+    return this.transform(expr) as any;
+  }
+
+  protected visitNumber(node: NumberLiteral): Expression {
+    return `num(${node.value})` as any;
+  }
+
+  protected visitVariable(node: Variable): Expression {
+    return `var(${node.name})` as any;
+  }
+
+  protected visitBinaryOp(node: BinaryOp): Expression {
+    const left = this.transform(node.left);
+    const right = this.transform(node.right);
+    return `bin(${node.operator},${left},${right})` as any;
+  }
+
+  protected visitUnaryOp(node: UnaryOp): Expression {
+    const operand = this.transform(node.operand);
+    return `un(${node.operator},${operand})` as any;
+  }
+
+  protected visitFunctionCall(node: FunctionCall): Expression {
+    const args = node.args.map(arg => this.transform(arg)).join(',');
+    return `call(${node.name},${args})` as any;
+  }
+
+  protected visitComponentAccess(node: ComponentAccess): Expression {
+    const object = this.transform(node.object);
+    return `comp(${object},${node.component})` as any;
+  }
+}
+
+/**
+ * Counts occurrences of subexpressions during traversal
+ */
+class ExpressionCounter extends ExpressionTransformer {
   counts = new Map<string, number>();
   expressions = new Map<string, Expression>();
+  private serializer = new ExpressionSerializer();
 
   count(expr: Expression): void {
-    const key = this.serialize(expr);
+    this.transform(expr);
+  }
 
+  serialize(expr: Expression): string {
+    return this.serializer.serialize(expr);
+  }
+
+  private recordExpression(expr: Expression): void {
+    const key = this.serialize(expr);
     const currentCount = this.counts.get(key) || 0;
     this.counts.set(key, currentCount + 1);
 
     if (!this.expressions.has(key)) {
       this.expressions.set(key, expr);
     }
-
-    switch (expr.kind) {
-      case 'binary':
-        this.count(expr.left);
-        this.count(expr.right);
-        break;
-
-      case 'unary':
-        this.count(expr.operand);
-        break;
-
-      case 'call':
-        for (const arg of expr.args) {
-          this.count(arg);
-        }
-        break;
-
-      case 'component':
-        this.count(expr.object);
-        break;
-    }
   }
 
-  serialize(expr: Expression): string {
-    switch (expr.kind) {
-      case 'number':
-        return `num(${expr.value})`;
+  protected visitNumber(node: NumberLiteral): Expression {
+    this.recordExpression(node);
+    return node;
+  }
 
-      case 'variable':
-        return `var(${expr.name})`;
+  protected visitVariable(node: Variable): Expression {
+    this.recordExpression(node);
+    return node;
+  }
 
-      case 'binary':
-        return `bin(${expr.operator},${this.serialize(expr.left)},${this.serialize(expr.right)})`;
+  protected visitBinaryOp(node: BinaryOp): Expression {
+    this.recordExpression(node);
+    return super.visitBinaryOp(node);
+  }
 
-      case 'unary':
-        return `un(${expr.operator},${this.serialize(expr.operand)})`;
+  protected visitUnaryOp(node: UnaryOp): Expression {
+    this.recordExpression(node);
+    return super.visitUnaryOp(node);
+  }
 
-      case 'call':
-        const args = expr.args.map(a => this.serialize(a)).join(',');
-        return `call(${expr.name},${args})`;
+  protected visitFunctionCall(node: FunctionCall): Expression {
+    this.recordExpression(node);
+    return super.visitFunctionCall(node);
+  }
 
-      case 'component':
-        return `comp(${this.serialize(expr.object)},${expr.component})`;
-    }
+  protected visitComponentAccess(node: ComponentAccess): Expression {
+    this.recordExpression(node);
+    return super.visitComponentAccess(node);
   }
 }
 
@@ -193,38 +227,46 @@ function substituteExpressions(
     };
   }
 
-  switch (expr.kind) {
-    case 'number':
-    case 'variable':
-      return expr;
-
-    case 'binary':
-      return {
-        kind: 'binary',
-        operator: expr.operator,
-        left: substituteExpressions(expr.left, subexprMap, counter),
-        right: substituteExpressions(expr.right, subexprMap, counter)
-      };
-
-    case 'unary':
-      return {
-        kind: 'unary',
-        operator: expr.operator,
-        operand: substituteExpressions(expr.operand, subexprMap, counter)
-      };
-
-    case 'call':
-      return {
-        kind: 'call',
-        name: expr.name,
-        args: expr.args.map(arg => substituteExpressions(arg, subexprMap, counter))
-      };
-
-    case 'component':
-      return {
-        kind: 'component',
-        object: substituteExpressions(expr.object, subexprMap, counter),
-        component: expr.component
-      };
+  let result = expr;
+  for (const [exprStr, varName] of subexprMap.entries()) {
+    const exprToReplace = counter.expressions.get(exprStr);
+    if (exprToReplace && counter.serialize(result) !== exprStr) {
+      result = substituteInExpression(result, exprToReplace, { kind: 'variable', name: varName }, counter);
+    }
   }
+
+  return result;
+}
+
+/**
+ * Transformer that substitutes a pattern with a replacement expression
+ */
+class SubstitutionTransformer extends ExpressionTransformer {
+  constructor(
+    private pattern: Expression,
+    private replacement: Expression,
+    private counter: ExpressionCounter
+  ) {
+    super();
+  }
+
+  transform(expr: Expression): Expression {
+    if (this.counter.serialize(expr) === this.counter.serialize(this.pattern)) {
+      return this.replacement;
+    }
+    return super.transform(expr);
+  }
+}
+
+/**
+ * Helper to substitute an expression pattern with a replacement
+ */
+function substituteInExpression(
+  expr: Expression,
+  pattern: Expression,
+  replacement: Expression,
+  counter: ExpressionCounter
+): Expression {
+  const transformer = new SubstitutionTransformer(pattern, replacement, counter);
+  return transformer.transform(expr);
 }

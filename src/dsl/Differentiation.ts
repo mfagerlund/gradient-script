@@ -19,6 +19,8 @@ import { Type, Types, TypeEnv } from './Types.js';
 import { expandBuiltIn, shouldExpand } from './Expander.js';
 import { builtIns } from './BuiltIns.js';
 import { inlineIntermediateVariables } from './Inliner.js';
+import { containsVariable } from './ExpressionUtils.js';
+import { DifferentiationError } from './Errors.js';
 
 /**
  * Result of differentiation
@@ -168,8 +170,11 @@ export class Differentiator {
             right: this.differentiate(left, wrt)
           };
         } else {
-          // General case (f^g with both variable)
-          throw new Error('Differentiation of f^g where both are variable is not yet supported');
+          throw new DifferentiationError(
+            'Power with variable exponent not supported',
+            'f^g',
+            'Both base and exponent depend on the differentiation variable'
+          );
         }
     }
   }
@@ -205,7 +210,11 @@ export class Differentiator {
 
   private diffMathFunction(name: string, args: Expression[], wrt: string): Expression {
     if (args.length !== 1 && name !== 'atan2' && name !== 'pow' && name !== 'min' && name !== 'max' && name !== 'clamp') {
-      throw new Error(`Differentiation of ${name} not yet supported`);
+      throw new DifferentiationError(
+        'Function differentiation not yet supported',
+        name,
+        `Expected 1 argument or specific multi-arg function, got ${args.length} arguments`
+      );
     }
 
     const arg = args[0];
@@ -395,7 +404,11 @@ export class Differentiator {
         }
 
       default:
-        throw new Error(`Differentiation of ${name} not yet supported`);
+        throw new DifferentiationError(
+          'Function differentiation not implemented',
+          name,
+          'This mathematical function does not have a derivative rule defined'
+        );
     }
   }
 
@@ -452,26 +465,7 @@ export class Differentiator {
    * Check if expression is constant with respect to wrt
    */
   private isConstant(expr: Expression, wrt: string): boolean {
-    switch (expr.kind) {
-      case 'number':
-        return true;
-      case 'variable':
-        return expr.name !== wrt;
-      case 'binary':
-        return this.isConstant(expr.left, wrt) && this.isConstant(expr.right, wrt);
-      case 'unary':
-        return this.isConstant(expr.operand, wrt);
-      case 'call':
-        return expr.args.every(arg => this.isConstant(arg, wrt));
-      case 'component':
-        if (expr.object.kind === 'variable') {
-          const fullName = `${expr.object.name}.${expr.component}`;
-          return fullName !== wrt;
-        }
-        return false;
-      default:
-        return false;
-    }
+    return !containsVariable(expr, wrt);
   }
 }
 

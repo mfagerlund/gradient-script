@@ -19,6 +19,7 @@ import {
   StructTypeAnnotation
 } from './AST.js';
 import { Token, TokenType, Lexer } from './Lexer.js';
+import { ParseError } from './Errors.js';
 
 export class Parser {
   private tokens: Token[];
@@ -40,7 +41,8 @@ export class Parser {
     }
 
     if (functions.length === 0) {
-      throw new Error('Expected at least one function definition');
+      const token = this.peek();
+      throw new ParseError('Expected at least one function definition', token.line, token.column);
     }
 
     return {
@@ -278,9 +280,9 @@ export class Parser {
         const args = this.argumentList();
         this.consume(TokenType.RPAREN, "Expected ')' after arguments");
 
-        // expr must be a variable (function name)
         if (expr.kind !== 'variable') {
-          throw new Error('Only simple function names are supported');
+          const token = this.previous();
+          throw new ParseError('Only simple function names are supported', token.line, token.column);
         }
 
         expr = {
@@ -392,8 +394,8 @@ export class Parser {
     throw this.error(this.peek(), message);
   }
 
-  private error(token: Token, message: string): Error {
-    return new Error(`${message} at line ${token.line}, column ${token.column}`);
+  private error(token: Token, message: string): ParseError {
+    return new ParseError(message, token.line, token.column, token.value);
   }
 }
 

@@ -19,6 +19,7 @@ import {
 } from './AST.js';
 import { Type, Types, TypeEnv } from './Types.js';
 import { builtIns } from './BuiltIns.js';
+import { TypeError } from './Errors.js';
 
 /**
  * Type inference visitor
@@ -66,11 +67,12 @@ export class TypeInferenceVisitor {
     const leftType = this.inferExpression(expr.left);
     const rightType = this.inferExpression(expr.right);
 
-    // Check compatibility
     if (!Types.compatible(leftType, rightType)) {
-      throw new Error(
-        `Type mismatch in binary operation ${expr.operator}: ` +
-        `${Types.toString(leftType)} ${expr.operator} ${Types.toString(rightType)}`
+      throw new TypeError(
+        `Type mismatch in binary operation`,
+        expr.operator,
+        Types.toString(leftType),
+        Types.toString(rightType)
       );
     }
 
@@ -94,19 +96,22 @@ export class TypeInferenceVisitor {
     const signature = builtIns.lookup(expr.name, argTypes);
 
     if (!signature) {
-      // Try to provide helpful error message
       if (builtIns.isBuiltIn(expr.name)) {
         const overloads = builtIns.getOverloads(expr.name);
         const expectedSigs = overloads.map(sig =>
           `${sig.name}(${sig.params.map(p => Types.toString(p)).join(', ')})`
         ).join(' or ');
+        const actualSig = `${expr.name}(${argTypes.map(t => Types.toString(t)).join(', ')})`;
 
-        throw new Error(
-          `No matching overload for ${expr.name}(${argTypes.map(t => Types.toString(t)).join(', ')}). ` +
-          `Expected: ${expectedSigs}`
+        throw new TypeError(
+          `No matching overload. Expected: ${expectedSigs}`,
+          actualSig
         );
       } else {
-        throw new Error(`Unknown function: ${expr.name}`);
+        throw new TypeError(
+          `Unknown function`,
+          expr.name
+        );
       }
     }
 
@@ -117,18 +122,21 @@ export class TypeInferenceVisitor {
   private inferComponent(expr: ComponentAccess): Type {
     const objectType = this.inferExpression(expr.object);
 
-    // Object must be a struct
     if (!Types.isStruct(objectType)) {
-      throw new Error(
-        `Cannot access component '${expr.component}' of scalar type`
+      throw new TypeError(
+        `Cannot access component of scalar type`,
+        expr.component,
+        'struct',
+        'scalar'
       );
     }
 
-    // Check component exists
     if (!objectType.components.includes(expr.component)) {
-      throw new Error(
-        `Component '${expr.component}' does not exist on type ${Types.toString(objectType)}. ` +
-        `Available components: ${objectType.components.join(', ')}`
+      throw new TypeError(
+        `Component does not exist. Available: ${objectType.components.join(', ')}`,
+        expr.component,
+        objectType.components.join('|'),
+        expr.component
       );
     }
 

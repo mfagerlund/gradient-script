@@ -18,6 +18,7 @@ import { Type, Types, TypeEnv } from './Types.js';
 import { GradientResult, StructuredGradient } from './Differentiation.js';
 import { simplifyGradients } from './Simplify.js';
 import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions } from './CSE.js';
+import { CodeGenError } from './Errors.js';
 
 /**
  * Code generation options
@@ -191,9 +192,12 @@ export class ExpressionCodeGen {
 
     // Handle clamp specially (not in Math)
     if (expr.name === 'clamp') {
-      // clamp(x, min, max) -> Math.max(min, Math.min(max, x))
       if (args.length !== 3) {
-        throw new Error('clamp requires 3 arguments: clamp(x, min, max)');
+        throw new CodeGenError(
+          'clamp requires 3 arguments: clamp(x, min, max)',
+          expr.name,
+          this.format
+        );
       }
       const [x, min, max] = args;
       if (this.format === 'typescript' || this.format === 'javascript') {

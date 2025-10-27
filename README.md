@@ -1,5 +1,10 @@
 # GradientScript
 
+[![npm version](https://badge.fury.io/js/gradient-script.svg)](https://www.npmjs.com/package/gradient-script)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub release](https://img.shields.io/github/v/release/mfagerlund/gradient-script)](https://github.com/mfagerlund/gradient-script/releases)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D14.0.0-brightgreen)](https://nodejs.org/)
+
 **Symbolic automatic differentiation for structured types**
 
 GradientScript is a source-to-source compiler that automatically generates gradient functions from your mathematical code. Unlike numerical AD frameworks (JAX, PyTorch), it produces clean, human-readable gradient formulas you can inspect, optimize, and integrate directly into your codebase.

@@ -1,0 +1,32 @@
+# Source files (only ship dist/)
+src/
+examples/
+tests/
+*.test.ts
+*.spec.ts
+
+# Development files
+.git/
+.github/
+.vscode/
+.idea/
+*.log
+*.tgz
+
+# Config files
+tsconfig.json
+vitest.config.ts
+.eslintrc*
+.prettierrc*
+
+# Documentation drafts
+docs/
+*.draft.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+.nyc_output/

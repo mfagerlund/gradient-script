@@ -1,0 +1,38 @@
+{
+  "name": "gradient-script",
+  "version": "0.1.0",
+  "description": "Symbolic differentiation for structured types with a simple DSL",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "keywords": [
+    "symbolic",
+    "differentiation",
+    "gradients",
+    "structured-types",
+    "vector",
+    "autodiff",
+    "code-generation"
+  ],
+  "author": "Mattias Fagerlund <mattias.fagerlund@carretera.se>",
+  "license": "MIT",
+  "files": [
+    "dist/"
+  ],
+  "devDependencies": {
+    "ts-node": "^10.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4",
+    "yargs": "^17.7.2"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:verbose": "cross-env VERBOSE=true vitest run"
+  }
+}

@@ -475,7 +475,7 @@ GradientScript includes a comprehensive test suite that validates all generated 
 npm test
 ```
 
-Current status: **78 tests passing**
+Current status: **129 tests passing**
 
 Test suite includes:
 

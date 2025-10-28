@@ -215,4 +215,33 @@ describe('DSL Code Generation', () => {
     expect(code).not.toContain('(piy - pjy + piy - pjy)');
   });
 
+  it('reuses sqrt forward variable (len) in gradients', () => {
+    const input = `
+      function rod(pix∇, piy∇, pjx∇, pjy∇, rest) {
+        dx = pix - pjx
+        dy = piy - pjy
+        len = sqrt(dx * dx + dy * dy)
+        return len - rest
+      }
+    `;
+
+    const program = parse(input);
+    const func = program.functions[0];
+    const env = inferFunction(func);
+    const gradients = computeFunctionGradients(func, env);
+
+    const code = generateGradientFunction(func, gradients, env, { cse: false });
+
+    // Should use len instead of Math.sqrt(dx * dx + dy * dy) in gradients
+    // Expected: dpix = dx / len
+    // Not: dpix = (dx + dx) / (2 * Math.sqrt(dx * dx + dy * dy))
+    expect(code).toMatch(/dpix.*=.*dx.*\/.*len/);
+    expect(code).toMatch(/dpiy.*=.*dy.*\/.*len/);
+
+    // Should not have redundant sqrt expressions in gradients
+    const gradientSection = code.split('// Gradients')[1] || code;
+    const sqrtMatches = (gradientSection.match(/Math\.sqrt\(/g) || []).length;
+    expect(sqrtMatches).toBe(0); // No sqrt in gradient expressions when len exists
+  });
+
 });

@@ -119,6 +119,60 @@ class Simplifier extends ExpressionTransformer {
       if (expressionsEqual(left, right)) {
         return { kind: 'number', value: 1 };
       }
+
+      // (a + a) / 2 → a
+      if (rightNum === 2 && left.kind === 'binary' && left.operator === '+') {
+        if (expressionsEqual(left.left, left.right)) {
+          return left.left;
+        }
+      }
+
+      // (a + a) / (2 * b) → a / b
+      if (right.kind === 'binary' && right.operator === '*') {
+        const rightLeft = right.left;
+        const rightRight = right.right;
+        const rightLeftNum = isNumber(rightLeft) ? rightLeft.value : null;
+
+        if (rightLeftNum === 2 && left.kind === 'binary' && left.operator === '+') {
+          if (expressionsEqual(left.left, left.right)) {
+            return {
+              kind: 'binary',
+              operator: '/',
+              left: left.left,
+              right: rightRight
+            };
+          }
+
+          // (-1 * a + a * -1) / (2 * b) → -a / b
+          const leftLeft = left.left;
+          const leftRight = left.right;
+
+          if (leftLeft.kind === 'binary' && leftLeft.operator === '*' &&
+              leftRight.kind === 'binary' && leftRight.operator === '*') {
+            const ll_left = leftLeft.left;
+            const ll_right = leftLeft.right;
+            const lr_left = leftRight.left;
+            const lr_right = leftRight.right;
+
+            const ll_leftNum = isNumber(ll_left) ? ll_left.value : null;
+            const lr_rightNum = isNumber(lr_right) ? lr_right.value : null;
+
+            // (-1 * a) + (a * -1)
+            if (ll_leftNum === -1 && lr_rightNum === -1 && expressionsEqual(ll_right, lr_left)) {
+              return {
+                kind: 'unary',
+                operator: '-',
+                operand: {
+                  kind: 'binary',
+                  operator: '/',
+                  left: ll_right,
+                  right: rightRight
+                }
+              };
+            }
+          }
+        }
+      }
     }
 
     // Power rules

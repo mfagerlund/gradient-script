@@ -387,10 +387,8 @@ export function generateGradientFunction(
   const includeComments = options.includeComments !== false;
   const shouldSimplify = options.simplify !== false; // Default to true
 
-  // Simplify gradients if requested
-  const gradientsToUse = shouldSimplify
-    ? { gradients: simplifyGradients(gradients.gradients) }
-    : gradients;
+  // Note: We don't simplify here yet - we'll do it after forward expression substitution
+  const gradientsToUse = gradients;
 
   const codegen = new ExpressionCodeGen(format, csharpFloatType);
   const lines: string[] = [];
@@ -475,7 +473,20 @@ export function generateGradientFunction(
     }
   }
 
+  // Apply forward expression substitution multiple times until no more changes
+  // This handles nested expressions like sqrt(dx*dx + dy*dy) where dx = pix - pjx
   reuseForwardExpressionsInGradients(gradientsToUse.gradients, forwardExpressionMap);
+  reuseForwardExpressionsInGradients(gradientsToUse.gradients, forwardExpressionMap);
+  reuseForwardExpressionsInGradients(gradientsToUse.gradients, forwardExpressionMap);
+
+  // Simplify gradients after forward expression substitution
+  if (shouldSimplify) {
+    const simplified = simplifyGradients(gradientsToUse.gradients);
+    gradientsToUse.gradients.clear();
+    for (const [key, value] of simplified.entries()) {
+      gradientsToUse.gradients.set(key, value);
+    }
+  }
 
   lines.push('');
 

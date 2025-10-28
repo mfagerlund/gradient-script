@@ -12,6 +12,8 @@
 
 GradientScript is a source-to-source compiler that automatically generates gradient functions from your mathematical code. Unlike numerical AD frameworks (JAX, PyTorch), it produces clean, human-readable gradient formulas you can inspect, optimize, and integrate directly into your codebase.
 
+It's perfect for LLM usage where the LLM can verify existing gradients or construct gradients you require with less risks of making errors.
+
 ## Why GradientScript?
 
 - **From real code to gradients**: Write natural math code, get symbolic derivatives

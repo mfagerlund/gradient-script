@@ -25,13 +25,19 @@ import { CodeGenError } from './Errors.js';
  * Code generation options
  */
 export interface CodeGenOptions {
-  format?: 'typescript' | 'javascript' | 'python';
+  format?: 'typescript' | 'javascript' | 'python' | 'csharp';
   includeComments?: boolean;
   simplify?: boolean;
   cse?: boolean;
   epsilon?: number;  // Add epsilon guards for zero denominators
   emitGuards?: boolean;  // Emit runtime guards for edge cases
+  csharpFloatType?: 'float' | 'double';  // C# float precision
+  csharpNamingConvention?: 'camelCase' | 'PascalCase';  // C# naming convention
 }
+function capitalize(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
 function expressionKey(expr: Expression): string {
   switch (expr.kind) {
     case 'number':
@@ -61,10 +67,15 @@ function shouldTrackForForwardReuse(expr: Expression): boolean {
  * Code generator for expressions
  */
 export class ExpressionCodeGen {
-  private format: 'typescript' | 'javascript' | 'python';
+  private format: 'typescript' | 'javascript' | 'python' | 'csharp';
+  private csharpFloatType: 'float' | 'double';
 
-  constructor(format: 'typescript' | 'javascript' | 'python' = 'typescript') {
+  constructor(
+    format: 'typescript' | 'javascript' | 'python' | 'csharp' = 'typescript',
+    csharpFloatType: 'float' | 'double' = 'float'
+  ) {
     this.format = format;
+    this.csharpFloatType = csharpFloatType;
   }
 
   /**
@@ -104,7 +115,7 @@ export class ExpressionCodeGen {
     let op = expr.operator;
     if (this.format === 'python' && (op === '^' || op === '**')) {
       op = '**'; // Python uses **
-    } else if ((this.format === 'typescript' || this.format === 'javascript') && (op === '^' || op === '**')) {
+    } else if ((this.format === 'typescript' || this.format === 'javascript' || this.format === 'csharp') && (op === '^' || op === '**')) {
       // Optimize: x^2 -> x*x, x^3 -> x*x*x (faster than Math.pow)
       // Only for simple expressions (variables, component access)
       const isSimple = expr.left.kind === 'variable' ||
@@ -125,8 +136,13 @@ export class ExpressionCodeGen {
           }
         }
       }
-      // Fall back to Math.pow for complex expressions or larger exponents
-      return `Math.pow(${left}, ${right})`;
+      // Fall back to Math.pow / MathF.Pow for complex expressions or larger exponents
+      if (this.format === 'csharp') {
+        const mathClass = this.csharpFloatType === 'float' ? 'MathF' : 'Math';
+        return `${mathClass}.Pow(${left}, ${right})`;
+      } else {
+        return `Math.pow(${left}, ${right})`;
+      }
     }
 
     return `${left} ${op} ${right}`;
@@ -229,6 +245,9 @@ export class ExpressionCodeGen {
         return `Math.max(${min}, Math.min(${max}, ${x}))`;
       } else if (this.format === 'python') {
         return `max(${min}, min(${max}, ${x}))`;
+      } else if (this.format === 'csharp') {
+        const mathClass = this.csharpFloatType === 'float' ? 'MathF' : 'Math';
+        return `${mathClass}.Max(${min}, ${mathClass}.Min(${max}, ${x}))`;
       }
     }
 
@@ -240,6 +259,10 @@ export class ExpressionCodeGen {
 
   private genComponent(expr: ComponentAccess): string {
     const obj = this.generate(expr.object);
+    if (this.format === 'csharp') {
+      // C# uses PascalCase for properties
+      return `${obj}.${capitalize(expr.component)}`;
+    }
     return `${obj}.${expr.component}`;
   }
 
@@ -280,10 +303,74 @@ export class ExpressionCodeGen {
         'max': 'max'
       };
       return mathFuncs[name] || name;
+    } else if (this.format === 'csharp') {
+      // Use MathF for float, Math for double
+      const mathClass = this.csharpFloatType === 'float' ? 'MathF' : 'Math';
+      const mathFuncs: Record<string, string> = {
+        'sin': `${mathClass}.Sin`,
+        'cos': `${mathClass}.Cos`,
+        'tan': `${mathClass}.Tan`,
+        'asin': `${mathClass}.Asin`,
+        'acos': `${mathClass}.Acos`,
+        'atan': `${mathClass}.Atan`,
+        'atan2': `${mathClass}.Atan2`,
+        'exp': `${mathClass}.Exp`,
+        'log': `${mathClass}.Log`,
+        'sqrt': `${mathClass}.Sqrt`,
+        'abs': `${mathClass}.Abs`,
+        'pow': `${mathClass}.Pow`,
+        'min': `${mathClass}.Min`,
+        'max': `${mathClass}.Max`
+      };
+      return mathFuncs[name] || name;
     }
 
     return name;
   }
+}
+
+/**
+ * Generate C# struct for gradient return type
+ */
+function generateCSharpGradientStruct(
+  func: FunctionDef,
+  gradients: GradientResult,
+  floatType: string
+): string[] {
+  const lines: string[] = [];
+  const structName = `${capitalize(func.name)}GradResult`;
+
+  lines.push(`public struct ${structName}`);
+  lines.push('{');
+  lines.push(`    public ${floatType} Value;`);
+
+  for (const [paramName, gradient] of gradients.gradients.entries()) {
+    const propName = capitalize(`d${paramName}`);
+    if (isStructuredGradient(gradient)) {
+      // Generate a nested struct type for structured gradients
+      const components = Array.from(gradient.components.keys());
+      lines.push(`    public ${capitalize(paramName)}Grad ${propName};`);
+    } else {
+      lines.push(`    public ${floatType} ${propName};`);
+    }
+  }
+
+  lines.push('}');
+
+  // Generate nested struct types for structured gradients
+  for (const [paramName, gradient] of gradients.gradients.entries()) {
+    if (isStructuredGradient(gradient)) {
+      lines.push('');
+      lines.push(`public struct ${capitalize(paramName)}Grad`);
+      lines.push('{');
+      for (const comp of gradient.components.keys()) {
+        lines.push(`    public ${floatType} ${capitalize(comp)};`);
+      }
+      lines.push('}');
+    }
+  }
+
+  return lines;
 }
 
 /**
@@ -296,6 +383,7 @@ export function generateGradientFunction(
   options: CodeGenOptions = {}
 ): string {
   const format = options.format || 'typescript';
+  const csharpFloatType = options.csharpFloatType || 'float';
   const includeComments = options.includeComments !== false;
   const shouldSimplify = options.simplify !== false; // Default to true
 
@@ -304,8 +392,14 @@ export function generateGradientFunction(
     ? { gradients: simplifyGradients(gradients.gradients) }
     : gradients;
 
-  const codegen = new ExpressionCodeGen(format);
+  const codegen = new ExpressionCodeGen(format, csharpFloatType);
   const lines: string[] = [];
+
+  // For C#, we need to generate a struct for the return type first
+  if (format === 'csharp') {
+    lines.push(...generateCSharpGradientStruct(func, gradientsToUse, csharpFloatType));
+    lines.push('');
+  }
 
   // Function signature
   const paramNames = func.parameters.map(p => p.name).join(', ');
@@ -314,6 +408,16 @@ export function generateGradientFunction(
     lines.push(`function ${func.name}_grad(${paramNames}) {`);
   } else if (format === 'python') {
     lines.push(`def ${func.name}_grad(${paramNames}):`);
+  } else if (format === 'csharp') {
+    const params = func.parameters.map(p => {
+      if (p.paramType && p.paramType.components) {
+        return `${capitalize(p.name)}Struct ${p.name}`;
+      }
+      return `${csharpFloatType} ${p.name}`;
+    }).join(', ');
+    const returnType = `${capitalize(func.name)}GradResult`;
+    lines.push(`public static ${returnType} ${capitalize(func.name)}_Grad(${params})`);
+    lines.push('{');
   }
 
   // Forward pass - compute intermediate variables
@@ -334,8 +438,10 @@ export function generateGradientFunction(
 
       if (format === 'typescript' || format === 'javascript') {
         lines.push(`  const ${varName} = ${generatedExpr};`);
-      } else {
+      } else if (format === 'python') {
         lines.push(`  ${varName} = ${generatedExpr}`);
+      } else if (format === 'csharp') {
+        lines.push(`    ${csharpFloatType} ${varName} = ${generatedExpr};`);
       }
     }
   }
@@ -350,15 +456,19 @@ export function generateGradientFunction(
     // Reuse existing variable
     if (format === 'typescript' || format === 'javascript') {
       lines.push(`  const value = ${existingVar};`);
-    } else {
+    } else if (format === 'python') {
       lines.push(`  value = ${existingVar}`);
+    } else if (format === 'csharp') {
+      lines.push(`    ${csharpFloatType} value = ${existingVar};`);
     }
   } else {
     // Compute new value
     if (format === 'typescript' || format === 'javascript') {
       lines.push(`  const value = ${valueCode};`);
-    } else {
+    } else if (format === 'python') {
       lines.push(`  value = ${valueCode}`);
+    } else if (format === 'csharp') {
+      lines.push(`    ${csharpFloatType} value = ${valueCode};`);
     }
     if (shouldTrackForForwardReuse(valueExpr) && !forwardExpressionMap.has(valueKey)) {
       forwardExpressionMap.set(valueKey, 'value');
@@ -415,8 +525,10 @@ export function generateGradientFunction(
         const code = codegen.generate(expr);
         if (format === 'typescript' || format === 'javascript') {
           lines.push(`  const ${varName} = ${code};`);
-        } else {
+        } else if (format === 'python') {
           lines.push(`  ${varName} = ${code}`);
+        } else if (format === 'csharp') {
+          lines.push(`    ${csharpFloatType} ${varName} = ${code};`);
         }
       }
 
@@ -473,21 +585,31 @@ export function generateGradientFunction(
           lines.push(`    ${comp},`);
         }
         lines.push(`  };`);
-      } else {
+      } else if (format === 'python') {
         lines.push(`  ${gradName} = {`);
         for (const comp of components) {
           const [key, value] = comp.split(': ');
           lines.push(`    "${key}": ${value},`);
         }
         lines.push(`  }`);
+      } else if (format === 'csharp') {
+        lines.push(`    var ${gradName} = new ${capitalize(paramName)}Grad`);
+        lines.push(`    {`);
+        for (const comp of components) {
+          const [key, value] = comp.split(': ');
+          lines.push(`        ${capitalize(key)} = ${value},`);
+        }
+        lines.push(`    };`);
       }
     } else {
       // Scalar gradient
       const code = codegen.generate(gradient);
       if (format === 'typescript' || format === 'javascript') {
         lines.push(`  const ${gradName} = ${code};`);
-      } else {
+      } else if (format === 'python') {
         lines.push(`  ${gradName} = ${code}`);
+      } else if (format === 'csharp') {
+        lines.push(`    ${csharpFloatType} ${gradName} = ${code};`);
       }
     }
   }
@@ -506,14 +628,22 @@ export function generateGradientFunction(
     }
     lines.push(`  };`);
     lines.push('}');
-  } else {
+  } else if (format === 'python') {
     lines.push(`  return {`);
     lines.push(`    "value": value,`);
     for (const gradName of gradNames) {
       lines.push(`    "${gradName}": ${gradName},`);
     }
     lines.push(`  }`);
-
+  } else if (format === 'csharp') {
+    lines.push(`    return new ${capitalize(func.name)}GradResult`);
+    lines.push(`    {`);
+    lines.push(`        Value = value,`);
+    for (const gradName of gradNames) {
+      lines.push(`        ${capitalize(gradName)} = ${gradName},`);
+    }
+    lines.push(`    };`);
+    lines.push('}');
   }
 
   return lines.join('\n');
@@ -527,7 +657,8 @@ export function generateForwardFunction(
   options: CodeGenOptions = {}
 ): string {
   const format = options.format || 'typescript';
-  const codegen = new ExpressionCodeGen(format);
+  const csharpFloatType = options.csharpFloatType || 'float';
+  const codegen = new ExpressionCodeGen(format, csharpFloatType);
   const lines: string[] = [];
 
   // Function signature
@@ -535,8 +666,21 @@ export function generateForwardFunction(
 
   if (format === 'typescript' || format === 'javascript') {
     lines.push(`function ${func.name}(${paramNames}) {`);
-  } else {
+  } else if (format === 'python') {
     lines.push(`def ${func.name}(${paramNames}):`);
+  } else if (format === 'csharp') {
+    const floatType = csharpFloatType;
+    const params = func.parameters.map(p => {
+      if (p.paramType && p.paramType.components) {
+        // Structured parameter - create a struct type name
+        return `${capitalize(p.name)}Struct ${p.name}`;
+      }
+      return `${floatType} ${p.name}`;
+    }).join(', ');
+
+    // Generate struct definitions for structured parameters first (we'll prepend them later)
+    lines.push(`public static ${floatType} ${capitalize(func.name)}(${params})`);
+    lines.push('{');
   }
 
   // Body
@@ -547,8 +691,10 @@ export function generateForwardFunction(
 
       if (format === 'typescript' || format === 'javascript') {
         lines.push(`  const ${varName} = ${expr};`);
-      } else {
+      } else if (format === 'python') {
         lines.push(`  ${varName} = ${expr}`);
+      } else if (format === 'csharp') {
+        lines.push(`    ${csharpFloatType} ${varName} = ${expr};`);
       }
     }
   }
@@ -558,8 +704,30 @@ export function generateForwardFunction(
   if (format === 'typescript' || format === 'javascript') {
     lines.push(`  return ${returnExpr};`);
     lines.push('}');
-  } else {
+  } else if (format === 'python') {
     lines.push(`  return ${returnExpr}`);
+  } else if (format === 'csharp') {
+    lines.push(`    return ${returnExpr};`);
+    lines.push('}');
+  }
+
+  // For C#, prepend struct definitions
+  if (format === 'csharp') {
+    const structLines: string[] = [];
+    for (const param of func.parameters) {
+      if (param.paramType && param.paramType.components) {
+        structLines.push(`public struct ${capitalize(param.name)}Struct`);
+        structLines.push('{');
+        for (const comp of param.paramType.components) {
+          structLines.push(`    public ${csharpFloatType} ${capitalize(comp)};`);
+        }
+        structLines.push('}');
+        structLines.push('');
+      }
+    }
+    if (structLines.length > 0) {
+      return structLines.join('\n') + lines.join('\n');
+    }
   }
 
   return lines.join('\n');

@@ -5,6 +5,9 @@
 [![GitHub release](https://img.shields.io/github/v/release/mfagerlund/gradient-script)](https://github.com/mfagerlund/gradient-script/releases)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D14.0.0-brightgreen)](https://nodejs.org/)
 
+> **For LLMs:** This README is available in raw format at:
+> `https://raw.githubusercontent.com/mfagerlund/gradient-script/main/README.md`
+
 **Symbolic automatic differentiation for structured types**
 
 GradientScript is a source-to-source compiler that automatically generates gradient functions from your mathematical code. Unlike numerical AD frameworks (JAX, PyTorch), it produces clean, human-readable gradient formulas you can inspect, optimize, and integrate directly into your codebase.
@@ -15,7 +18,7 @@ GradientScript is a source-to-source compiler that automatically generates gradi
 - **Verified correctness**: Every gradient automatically checked against numerical differentiation
 - **Structured types**: Work with vectors `{x, y}` and custom structures, not just scalars
 - **Zero runtime overhead**: No tape, no graph - just pure gradient functions
-- **Multiple output languages**: TypeScript, JavaScript, or Python
+- **Multiple output languages**: TypeScript, JavaScript, Python, or C#
 - **Readable output**: Human-reviewable formulas with automatic optimization
 
 ## Installation
@@ -235,13 +238,14 @@ function angle_between_grad(u, v) {
 gradient-script <file.gs> [options]
 
 Options:
-  --format <format>     typescript (default), javascript, python
-  --no-simplify         Disable gradient simplification
-  --no-cse              Disable common subexpression elimination
-  --no-comments         Omit comments in generated code
-  --guards              Emit runtime guards for potential singularities
-  --epsilon <value>     Epsilon value for guards (default: 1e-10)
-  --help, -h            Show help message
+  --format <format>              typescript (default), javascript, python, csharp
+  --no-simplify                  Disable gradient simplification
+  --no-cse                       Disable common subexpression elimination
+  --no-comments                  Omit comments in generated code
+  --guards                       Emit runtime guards for potential singularities
+  --epsilon <value>              Epsilon value for guards (default: 1e-10)
+  --csharp-float-type <type>     C# float precision: float (default) or double
+  --help, -h                     Show help message
 ```
 
 GradientScript automatically generates gradient functions for all functions in your `.gs` file.
@@ -256,6 +260,12 @@ gradient-script spring.gs --format python
 
 # Generate JavaScript without CSE optimization
 gradient-script spring.gs --format javascript --no-cse
+
+# Generate C# for Unity/Godot (float precision)
+gradient-script spring.gs --format csharp
+
+# Generate C# with double precision
+gradient-script spring.gs --format csharp --csharp-float-type double
 ```
 
 ## Language Syntax
@@ -488,7 +498,7 @@ Test suite includes:
 - CSE optimization correctness
 - Operator precedence preservation
 - Power optimization (x*x vs Math.pow)
-- Multiple output formats (TypeScript, JavaScript, Python)
+- Multiple output formats (TypeScript, JavaScript, Python, C#)
 - Algebraic simplification correctness
 
 **Key guarantee**: If a test passes, the generated gradient is correct to within numerical precision (~10 decimal places).
@@ -514,6 +524,28 @@ GradientScript is under active development. Contributions welcome!
 - Additional output formats (C, Rust, GLSL)
 - Web playground for live gradient generation
 - Benchmarking suite
+
+## Examples
+
+See the `examples/` directory for complete examples:
+
+- **Physics Constraints**: [`examples/PHYSICS_EXAMPLES.md`](examples/PHYSICS_EXAMPLES.md) - Comprehensive guide to using structured types for XPBD constraints, rigid body dynamics, and more
+  - Raw (LLM-friendly): `https://raw.githubusercontent.com/mfagerlund/gradient-script/main/examples/PHYSICS_EXAMPLES.md`
+- **XPBD Constraints**: `xpbd-rod-constraint.gs`, `xpbd-angle-constraint.gs`
+- **Distance Functions**: `distance.gs`, `point-segment-distance.gs`
+- **Geometry**: `triangle-area.gs`, `bearing.gs`, `circle-fit.gs`
+
+**Try them:**
+```bash
+# View physics examples guide
+cat examples/PHYSICS_EXAMPLES.md
+
+# Generate TypeScript from XPBD rod constraint
+gradient-script examples/xpbd-rod-constraint.gs
+
+# Generate C# for Unity/Godot
+gradient-script examples/xpbd-angle-constraint.gs --format csharp
+```
 
 ## License
 

@@ -3,6 +3,8 @@
  * Tokenizes input with support for ∇, ^, **, and structured types
  */
 
+import { ParseError } from './Errors.js';
+
 export enum TokenType {
   // Literals
   NUMBER = 'NUMBER',
@@ -149,7 +151,8 @@ export class Lexer {
         return { type: TokenType.NEWLINE, value: '\n', line, column };
     }
 
-    throw new Error(`Unexpected character '${char}' at line ${line}, column ${column}`);
+    // Create a more helpful error for common mistakes
+    throw new ParseError(`Unexpected character '${char}'`, line, column, char);
   }
 
   private number(): Token {

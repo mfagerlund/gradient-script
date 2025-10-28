@@ -7,6 +7,7 @@ import { computeFunctionGradients } from './dsl/Differentiation.js';
 import { generateComplete } from './dsl/CodeGen.js';
 import type { CodeGenOptions } from './dsl/CodeGen.js';
 import { analyzeGuards, formatGuardWarnings } from './dsl/Guards.js';
+import { ParseError, formatParseError } from './dsl/Errors.js';
 
 function printUsage() {
   console.log(`
@@ -16,18 +17,20 @@ Usage:
   gradient-script <file.gs> [options]
 
 Options:
-  --format <format>     Output format: typescript (default), javascript, python
+  --format <format>     Output format: typescript (default), javascript, python, csharp
   --no-simplify         Disable gradient simplification
   --no-cse              Disable common subexpression elimination
   --no-comments         Omit comments in generated code
   --guards              Emit runtime guards for division by zero (experimental)
   --epsilon <value>     Epsilon value for guards (default: 1e-10)
+  --csharp-float-type <type>   C# float precision: float (default) or double
   --help, -h            Show this help message
 
 Examples:
   gradient-script angle.gs
   gradient-script angle.gs --format python
   gradient-script angle.gs --format javascript --no-comments
+  gradient-script angle.gs --format csharp
 
 Input File Format (.gs):
   function name(param1∇: {x, y}, param2∇) {
@@ -39,6 +42,12 @@ Input File Format (.gs):
   The ∇ symbol marks parameters that need gradients computed.
   Type annotations like {x, y} specify structured types.
   All functions in the file are processed automatically.
+
+For more information and examples:
+  https://github.com/mfagerlund/gradient-script
+
+  README (raw, LLM-friendly):
+  https://raw.githubusercontent.com/mfagerlund/gradient-script/main/README.md
   `.trim());
 }
 function main() {
@@ -72,11 +81,11 @@ function main() {
         process.exit(1);
       }
       const format = args[++i];
-      if (format !== 'typescript' && format !== 'javascript' && format !== 'python') {
-        console.error(`Error: Invalid format "${format}". Must be: typescript, javascript, or python`);
+      if (format !== 'typescript' && format !== 'javascript' && format !== 'python' && format !== 'csharp') {
+        console.error(`Error: Invalid format "${format}". Must be: typescript, javascript, python, or csharp`);
         process.exit(1);
       }
-      options.format = format;
+      options.format = format as 'typescript' | 'javascript' | 'python' | 'csharp';
     } else if (arg === '--no-simplify') {
       options.simplify = false;
     } else if (arg === '--no-cse') {
@@ -96,6 +105,17 @@ function main() {
         process.exit(1);
       }
       options.epsilon = epsilonValue;
+    } else if (arg === '--csharp-float-type') {
+      if (i + 1 >= args.length) {
+        console.error('Error: Missing value for --csharp-float-type');
+        process.exit(1);
+      }
+      const floatType = args[++i];
+      if (floatType !== 'float' && floatType !== 'double') {
+        console.error(`Error: Invalid C# float type "${floatType}". Must be: float or double`);
+        process.exit(1);
+      }
+      options.csharpFloatType = floatType;
     } else {
       console.error(`Error: Unknown option "${arg}"`);
       printUsage();
@@ -145,8 +165,11 @@ function main() {
 
     console.log(outputs.join('\n\n'));
   } catch (err) {
-    console.error('Error: Failed to process input file');
-    if (err instanceof Error) {
+    if (err instanceof ParseError) {
+      // Use formatted error message for parse errors (always verbose with stack trace)
+      console.error(formatParseError(err, input, true));
+    } else if (err instanceof Error) {
+      console.error('Error: Failed to process input file');
       console.error(err.message);
       if (err.stack) {
         console.error('\nStack trace:');

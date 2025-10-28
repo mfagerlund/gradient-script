@@ -40,7 +40,7 @@ function distance(u: Vec2, v: Vec2): number {
 }
 ```
 
-Convert it to GradientScript by marking what you need gradients for:
+Convert it to GradientScript (realistically, let your LLM convert it giving it a reference here - and/or free usage of the CLI) by marking what you need gradients for:
 
 ```typescript
 // distance.gs

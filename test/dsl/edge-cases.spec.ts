@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from '../../src/dsl/Parser';
-import { inferFunction } from '../../src/dsl/TypeInference';
-import { computeFunctionGradients } from '../../src/dsl/Differentiation';
+import { parseAndCompile } from '../helpers.js';
 import { GradientChecker } from '../../src/dsl/GradientChecker';
 import { ParseError, TypeError } from '../../src/dsl/Errors';
+import { inferFunction } from '../../src/dsl/TypeInference';
+import { computeFunctionGradients } from '../../src/dsl/Differentiation';
 
 describe('DSL Edge Cases', () => {
   describe('Division by Zero in Gradients', () => {
@@ -14,10 +15,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -38,10 +36,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -61,10 +56,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['v', { x: 0.0, y: 0.0 }]]);
@@ -83,10 +75,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['v', { x: 3.0, y: 4.0 }]]);
@@ -103,10 +92,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -126,10 +112,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 1e-8]]);
@@ -148,10 +131,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -171,10 +151,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -194,10 +171,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -217,10 +191,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -240,10 +211,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -266,10 +234,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -288,10 +253,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -312,10 +274,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 0.001]]);
@@ -332,10 +291,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -581,10 +537,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 1.0]]);
@@ -602,10 +555,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 1.01]]);
@@ -622,10 +572,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 0.5]]);
@@ -642,10 +589,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 5.0]]);
@@ -662,10 +606,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -687,10 +628,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -710,10 +648,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -733,10 +668,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 5.0]]);
@@ -753,10 +685,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 1.0001]]);
@@ -773,10 +702,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -796,10 +722,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([
@@ -835,10 +758,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', Math.PI / 4]]);
@@ -891,10 +811,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([['x', 5.0]]);
@@ -911,10 +828,7 @@ describe('DSL Edge Cases', () => {
         }
       `;
 
-      const program = parse(input);
-      const func = program.functions[0];
-      const env = inferFunction(func);
-      const gradients = computeFunctionGradients(func, env);
+      const { func, env, gradients } = parseAndCompile(input);
 
       const checker = new GradientChecker();
       const testPoint = new Map([

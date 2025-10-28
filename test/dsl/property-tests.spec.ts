@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parse } from '../../src/dsl/Parser';
-import { inferFunction } from '../../src/dsl/TypeInference';
-import { computeFunctionGradients } from '../../src/dsl/Differentiation';
+import { parseAndCompile } from '../helpers.js';
 import { generateGradientFunction } from '../../src/dsl/CodeGen';
 
 function evalGeneratedCode(code: string, funcName: string): any {
@@ -26,10 +24,7 @@ describe('Property Tests - Singularities', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'normalized_dot_grad');
@@ -60,10 +55,7 @@ describe('Property Tests - Singularities', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'distance_grad');
@@ -90,10 +82,7 @@ describe('Property Tests - Singularities', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'angle_between_grad');
@@ -133,10 +122,7 @@ describe('Property Tests - Rotation Invariance', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'distance_grad');
@@ -171,10 +157,7 @@ describe('Property Tests - Rotation Invariance', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'dot_product_grad');
@@ -212,10 +195,7 @@ describe('Property Tests - Symmetry', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'distance_grad');
@@ -245,10 +225,7 @@ describe('Property Tests - Symmetry', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'cross_product_grad');
@@ -275,10 +252,7 @@ describe('Property Tests - Scale Invariance', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'cosine_similarity_grad');
@@ -309,10 +283,7 @@ describe('Property Tests - Scale Invariance', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'distance_squared_grad');
@@ -348,10 +319,7 @@ describe('Property Tests - Gradient Properties', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'distance_grad');
@@ -389,10 +357,7 @@ describe('Property Tests - Gradient Properties', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'relative_distance_grad');
@@ -425,10 +390,7 @@ describe('Property Tests - Advanced Invariants', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'se2_residual_grad');
@@ -468,10 +430,7 @@ describe('Property Tests - Advanced Invariants', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'se2_residual_grad');
@@ -504,10 +463,7 @@ describe('Property Tests - Advanced Invariants', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'reproj_error_grad');
@@ -555,10 +511,7 @@ describe('Property Tests - Advanced Invariants', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'bearing_of_grad');
@@ -601,10 +554,7 @@ describe('Property Tests - Advanced Invariants', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'bearing_of_grad');

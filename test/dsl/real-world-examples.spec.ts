@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parse } from '../../src/dsl/Parser';
-import { inferFunction } from '../../src/dsl/TypeInference';
-import { computeFunctionGradients } from '../../src/dsl/Differentiation';
+import { parseAndCompile } from '../helpers.js';
 import { generateGradientFunction } from '../../src/dsl/CodeGen';
 
 function evalGeneratedCode(code: string, funcName: string): any {
@@ -44,10 +42,7 @@ describe('Real-World Examples - Geometry', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'signed_distance_point_line_grad');
@@ -94,10 +89,7 @@ describe('Real-World Examples - Geometry', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'triangle_area_grad');
@@ -145,10 +137,7 @@ describe('Real-World Examples - Geometry', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'circle_fit_energy_grad');
@@ -201,10 +190,7 @@ describe('Real-World Examples - Robotics & Vision', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'se2_residual_grad');
@@ -256,10 +242,7 @@ describe('Real-World Examples - Robotics & Vision', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'reproj_error_grad');
@@ -313,10 +296,7 @@ describe('Real-World Examples - Robotics & Vision', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
     const code = generateGradientFunction(func, gradients, env, { simplify: true });
 
     const f_grad = evalGeneratedCode(code, 'bearing_of_grad');

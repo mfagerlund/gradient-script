@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parse } from '../../src/dsl/Parser';
-import { inferFunction } from '../../src/dsl/TypeInference';
-import { computeFunctionGradients } from '../../src/dsl/Differentiation';
+import { parseAndCompile } from '../helpers.js';
 
 describe('DSL atan2 Example', () => {
   it('should compute gradients for angle_between function', () => {
@@ -13,14 +11,7 @@ describe('DSL atan2 Example', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-
-    // Infer types
-    const env = inferFunction(func);
-
-    // Compute gradients
-    const result = computeFunctionGradients(func, env);
+    const { func, env, gradients: result } = parseAndCompile(input);
 
     // Check that we have gradients for u and v
     expect(result.gradients.has('u')).toBe(true);
@@ -50,10 +41,7 @@ describe('DSL atan2 Example', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const result = computeFunctionGradients(func, env);
+    const { func, env, gradients: result } = parseAndCompile(input);
 
     expect(result.gradients.has('u')).toBe(true);
     expect(result.gradients.has('v')).toBe(true);
@@ -72,10 +60,7 @@ describe('DSL atan2 Example', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const result = computeFunctionGradients(func, env);
+    const { func, env, gradients: result } = parseAndCompile(input);
 
     // Only u has gradients (v doesn't have ∇)
     expect(result.gradients.has('u')).toBe(true);
@@ -89,10 +74,7 @@ describe('DSL atan2 Example', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const result = computeFunctionGradients(func, env);
+    const { func, env, gradients: result } = parseAndCompile(input);
 
     expect(result.gradients.has('v')).toBe(true);
 
@@ -109,10 +91,7 @@ describe('DSL atan2 Example', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const result = computeFunctionGradients(func, env);
+    const { func, env, gradients: result } = parseAndCompile(input);
 
     expect(result.gradients.has('u')).toBe(true);
     expect(result.gradients.has('v')).toBe(true);
@@ -125,10 +104,7 @@ describe('DSL atan2 Example', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const result = computeFunctionGradients(func, env);
+    const { func, env, gradients: result } = parseAndCompile(input);
 
     expect(result.gradients.has('v')).toBe(true);
   });
@@ -140,10 +116,7 @@ describe('DSL atan2 Example', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const result = computeFunctionGradients(func, env);
+    const { func, env, gradients: result } = parseAndCompile(input);
 
     expect(result.gradients.has('a')).toBe(true);
 

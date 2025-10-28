@@ -12,8 +12,9 @@ import { ExpressionTransformer } from './ExpressionTransformer.js';
 /**
  * Expression transformer that substitutes variables from a substitution map
  * Handles recursive inlining by reprocessing substituted expressions
+ * Used for inlining intermediate variables to eliminate assignments
  */
-class SubstitutionTransformer extends ExpressionTransformer {
+class VariableSubstitutionTransformer extends ExpressionTransformer {
   constructor(private substitutions: Map<string, Expression>) {
     super();
   }
@@ -43,6 +44,6 @@ export function inlineIntermediateVariables(func: FunctionDef): Expression {
   }
 
   // Use transformer to inline all variables
-  const transformer = new SubstitutionTransformer(substitutions);
+  const transformer = new VariableSubstitutionTransformer(substitutions);
   return transformer.transform(func.returnExpr);
 }

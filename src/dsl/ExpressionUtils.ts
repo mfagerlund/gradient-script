@@ -223,3 +223,33 @@ export function expressionDepth(expr: Expression): number {
       return 1 + expressionDepth(expr.object);
   }
 }
+
+/**
+ * Serializes an expression to canonical string representation.
+ * Used for expression comparison and hashing (CSE, CodeGen forward reuse).
+ *
+ * This ensures consistent string representation of expressions across different
+ * parts of the codebase.
+ */
+export function serializeExpression(expr: Expression): string {
+  switch (expr.kind) {
+    case 'number':
+      return `num(${expr.value})`;
+
+    case 'variable':
+      return `var(${expr.name})`;
+
+    case 'binary':
+      return `bin(${expr.operator},${serializeExpression(expr.left)},${serializeExpression(expr.right)})`;
+
+    case 'unary':
+      return `un(${expr.operator},${serializeExpression(expr.operand)})`;
+
+    case 'call':
+      const args = expr.args.map(arg => serializeExpression(arg)).join(',');
+      return `call(${expr.name},${args})`;
+
+    case 'component':
+      return `comp(${serializeExpression(expr.object)},${expr.component})`;
+  }
+}

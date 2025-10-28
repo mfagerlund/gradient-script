@@ -13,39 +13,7 @@ import {
   NumberLiteral
 } from './AST.js';
 import { ExpressionTransformer } from './ExpressionTransformer.js';
-
-/**
- * Serializes expressions to canonical string form for comparison
- * This is a dedicated serializer that doesn't abuse the type system
- */
-class ExpressionSerializer {
-  serialize(expr: Expression): string {
-    switch (expr.kind) {
-      case 'number':
-        return `num(${expr.value})`;
-
-      case 'variable':
-        return `var(${expr.name})`;
-
-      case 'binary':
-        const left = this.serialize(expr.left);
-        const right = this.serialize(expr.right);
-        return `bin(${expr.operator},${left},${right})`;
-
-      case 'unary':
-        const operand = this.serialize(expr.operand);
-        return `un(${expr.operator},${operand})`;
-
-      case 'call':
-        const args = expr.args.map(arg => this.serialize(arg)).join(',');
-        return `call(${expr.name},${args})`;
-
-      case 'component':
-        const object = this.serialize(expr.object);
-        return `comp(${object},${expr.component})`;
-    }
-  }
-}
+import { serializeExpression } from './ExpressionUtils.js';
 
 export interface CSEResult {
   intermediates: Map<string, Expression>;
@@ -155,14 +123,13 @@ function shouldExtract(expr: Expression): boolean {
 class ExpressionCounter extends ExpressionTransformer {
   counts = new Map<string, number>();
   expressions = new Map<string, Expression>();
-  private serializer = new ExpressionSerializer();
 
   count(expr: Expression): void {
     this.transform(expr);
   }
 
   serialize(expr: Expression): string {
-    return this.serializer.serialize(expr);
+    return serializeExpression(expr);
   }
 
   private recordExpression(expr: Expression): void {
@@ -236,8 +203,9 @@ function substituteExpressions(
 
 /**
  * Transformer that substitutes a pattern with a replacement expression
+ * Used for CSE optimization to replace repeated subexpressions with intermediate variables
  */
-class SubstitutionTransformer extends ExpressionTransformer {
+class PatternSubstitutionTransformer extends ExpressionTransformer {
   constructor(
     private pattern: Expression,
     private replacement: Expression,
@@ -263,6 +231,6 @@ function substituteInExpression(
   replacement: Expression,
   counter: ExpressionCounter
 ): Expression {
-  const transformer = new SubstitutionTransformer(pattern, replacement, counter);
+  const transformer = new PatternSubstitutionTransformer(pattern, replacement, counter);
   return transformer.transform(expr);
 }

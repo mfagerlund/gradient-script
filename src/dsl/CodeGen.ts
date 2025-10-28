@@ -20,6 +20,7 @@ import { simplifyGradients } from './Simplify.js';
 import { ExpressionTransformer } from './ExpressionTransformer.js';
 import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions } from './CSE.js';
 import { CodeGenError } from './Errors.js';
+import { serializeExpression } from './ExpressionUtils.js';
 
 /**
  * Code generation options
@@ -38,22 +39,6 @@ function capitalize(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-function expressionKey(expr: Expression): string {
-  switch (expr.kind) {
-    case 'number':
-      return `num(${expr.value})`;
-    case 'variable':
-      return `var(${expr.name})`;
-    case 'binary':
-      return `bin(${expr.operator},${expressionKey(expr.left)},${expressionKey(expr.right)})`;
-    case 'unary':
-      return `un(${expr.operator},${expressionKey(expr.operand)})`;
-    case 'call':
-      return `call(${expr.name},${expr.args.map(arg => expressionKey(arg)).join(',')})`;
-    case 'component':
-      return `comp(${expressionKey(expr.object)},${expr.component})`;
-  }
-}
 function shouldTrackForForwardReuse(expr: Expression): boolean {
   switch (expr.kind) {
     case 'number':
@@ -266,66 +251,36 @@ export class ExpressionCodeGen {
     return `${obj}.${expr.component}`;
   }
 
+  // Math functions that should be mapped across all formats
+  private static readonly MATH_FUNCTIONS = [
+    'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2',
+    'exp', 'log', 'sqrt', 'abs', 'pow', 'min', 'max'
+  ] as const;
+
+  // Python built-in functions that don't need the math. prefix
+  private static readonly PYTHON_BUILTINS = ['abs', 'pow', 'min', 'max'];
+
   private mapFunctionName(name: string): string {
-    if (this.format === 'typescript' || this.format === 'javascript') {
-      const mathFuncs: Record<string, string> = {
-        'sin': 'Math.sin',
-        'cos': 'Math.cos',
-        'tan': 'Math.tan',
-        'asin': 'Math.asin',
-        'acos': 'Math.acos',
-        'atan': 'Math.atan',
-        'atan2': 'Math.atan2',
-        'exp': 'Math.exp',
-        'log': 'Math.log',
-        'sqrt': 'Math.sqrt',
-        'abs': 'Math.abs',
-        'pow': 'Math.pow',
-        'min': 'Math.min',
-        'max': 'Math.max'
-      };
-      return mathFuncs[name] || name;
-    } else if (this.format === 'python') {
-      const mathFuncs: Record<string, string> = {
-        'atan2': 'math.atan2',
-        'sin': 'math.sin',
-        'cos': 'math.cos',
-        'tan': 'math.tan',
-        'asin': 'math.asin',
-        'acos': 'math.acos',
-        'atan': 'math.atan',
-        'exp': 'math.exp',
-        'log': 'math.log',
-        'sqrt': 'math.sqrt',
-        'abs': 'abs',
-        'pow': 'pow',
-        'min': 'min',
-        'max': 'max'
-      };
-      return mathFuncs[name] || name;
-    } else if (this.format === 'csharp') {
-      // Use MathF for float, Math for double
-      const mathClass = this.csharpFloatType === 'float' ? 'MathF' : 'Math';
-      const mathFuncs: Record<string, string> = {
-        'sin': `${mathClass}.Sin`,
-        'cos': `${mathClass}.Cos`,
-        'tan': `${mathClass}.Tan`,
-        'asin': `${mathClass}.Asin`,
-        'acos': `${mathClass}.Acos`,
-        'atan': `${mathClass}.Atan`,
-        'atan2': `${mathClass}.Atan2`,
-        'exp': `${mathClass}.Exp`,
-        'log': `${mathClass}.Log`,
-        'sqrt': `${mathClass}.Sqrt`,
-        'abs': `${mathClass}.Abs`,
-        'pow': `${mathClass}.Pow`,
-        'min': `${mathClass}.Min`,
-        'max': `${mathClass}.Max`
-      };
-      return mathFuncs[name] || name;
+    // Check if this is a known math function
+    if (!ExpressionCodeGen.MATH_FUNCTIONS.includes(name as any)) {
+      return name;
     }
 
-    return name;
+    // Define format-specific mappers
+    const mappers: Record<string, (fn: string) => string> = {
+      typescript: (fn) => `Math.${fn}`,
+      javascript: (fn) => `Math.${fn}`,
+      python: (fn) =>
+        ExpressionCodeGen.PYTHON_BUILTINS.includes(fn) ? fn : `math.${fn}`,
+      csharp: (fn) => {
+        const mathClass = this.csharpFloatType === 'float' ? 'MathF' : 'Math';
+        const capitalized = fn.charAt(0).toUpperCase() + fn.slice(1);
+        return `${mathClass}.${capitalized}`;
+      }
+    };
+
+    const mapper = mappers[this.format];
+    return mapper ? mapper(name) : name;
   }
 }
 
@@ -428,7 +383,7 @@ export function generateGradientFunction(
       const generatedExpr = codegen.generate(stmt.expression);
 
       if (shouldTrackForForwardReuse(stmt.expression)) {
-        const exprKey = expressionKey(stmt.expression);
+        const exprKey = serializeExpression(stmt.expression);
         if (!forwardExpressionMap.has(exprKey)) {
           forwardExpressionMap.set(exprKey, varName);
         }
@@ -446,7 +401,7 @@ export function generateGradientFunction(
 
   // Compute output value - reuse forward pass variables if possible
   const valueExpr = func.returnExpr;
-  const valueKey = expressionKey(valueExpr);
+  const valueKey = serializeExpression(valueExpr);
   const existingVar = forwardExpressionMap.get(valueKey);
   const valueCode = codegen.generate(valueExpr);
 
@@ -779,7 +734,7 @@ class ForwardExpressionSubstituter extends ExpressionTransformer {
   }
 
   override transform(expr: Expression): Expression {
-    const key = expressionKey(expr);
+    const key = serializeExpression(expr);
     const varName = this.forwardExpressions.get(key);
     if (varName) {
       return {

@@ -12,6 +12,7 @@ import {
   NumberLiteral
 } from './AST.js';
 import { Type, Types } from './Types.js';
+import { DifferentiationError } from './Errors.js';
 
 /**
  * Expand built-in function calls to scalar expressions
@@ -27,13 +28,23 @@ export function expandBuiltIn(call: FunctionCall): Expression {
     case 'magnitude2d':
       return expandMagnitude2d(args[0]);
     case 'normalize2d':
-      throw new Error('normalize2d not yet supported in differentiation');
+      throw new DifferentiationError(
+        'normalize2d not yet supported',
+        'normalize2d',
+        'Vector normalization requires special handling for zero-length vectors. ' +
+        'Use magnitude2d() and division for now.'
+      );
     case 'distance2d':
       return expandDistance2d(args[0], args[1]);
     case 'dot3d':
       return expandDot3d(args[0], args[1]);
     case 'cross3d':
-      throw new Error('cross3d returns vector - not yet supported');
+      throw new DifferentiationError(
+        'cross3d returns vector - not yet supported',
+        'cross3d',
+        'Cross product returns a 3D vector, which requires structured gradient support. ' +
+        'This feature is not yet implemented.'
+      );
     case 'magnitude3d':
       return expandMagnitude3d(args[0]);
     default:

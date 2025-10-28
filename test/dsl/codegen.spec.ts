@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from '../../src/dsl/Parser';
-import { inferFunction } from '../../src/dsl/TypeInference';
-import { computeFunctionGradients } from '../../src/dsl/Differentiation';
+import { parseAndCompile } from '../helpers.js';
 import { generateComplete, generateGradientFunction, generateForwardFunction } from '../../src/dsl/CodeGen';
 
 describe('DSL Code Generation', () => {
@@ -12,10 +11,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateGradientFunction(func, gradients, env);
 
@@ -33,10 +29,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateComplete(func, gradients, env);
 
@@ -65,10 +58,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateGradientFunction(func, gradients, env);
 
@@ -87,10 +77,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateGradientFunction(func, gradients, env);
 
@@ -125,10 +112,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateComplete(func, gradients, env);
 
@@ -143,10 +127,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateGradientFunction(func, gradients, env, { format: 'python' });
 
@@ -162,10 +143,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateGradientFunction(func, gradients, env, { includeComments: true });
 
@@ -179,10 +157,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateComplete(func, gradients, env);
 
@@ -202,10 +177,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateGradientFunction(func, gradients, env, { cse: false });
 
@@ -225,10 +197,7 @@ describe('DSL Code Generation', () => {
       }
     `;
 
-    const program = parse(input);
-    const func = program.functions[0];
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+    const { func, env, gradients } = parseAndCompile(input);
 
     const code = generateGradientFunction(func, gradients, env, { cse: false });
 

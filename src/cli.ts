@@ -38,9 +38,9 @@ Input File Format (.gs):
 
   The ∇ symbol marks parameters that need gradients computed.
   Type annotations like {x, y} specify structured types.
+  All functions in the file are processed automatically.
   `.trim());
 }
-
 function main() {
   const args = process.argv.slice(2);
 
@@ -67,6 +67,10 @@ function main() {
     const arg = args[i];
 
     if (arg === '--format') {
+      if (i + 1 >= args.length) {
+        console.error('Error: Missing value for --format');
+        process.exit(1);
+      }
       const format = args[++i];
       if (format !== 'typescript' && format !== 'javascript' && format !== 'python') {
         console.error(`Error: Invalid format "${format}". Must be: typescript, javascript, or python`);
@@ -82,9 +86,13 @@ function main() {
     } else if (arg === '--guards') {
       options.emitGuards = true;
     } else if (arg === '--epsilon') {
+      if (i + 1 >= args.length) {
+        console.error('Error: Missing value for --epsilon');
+        process.exit(1);
+      }
       const epsilonValue = parseFloat(args[++i]);
       if (isNaN(epsilonValue) || epsilonValue <= 0) {
-        console.error(`Error: Invalid epsilon value. Must be a positive number.`);
+        console.error('Error: Invalid epsilon value. Must be a positive number.');
         process.exit(1);
       }
       options.epsilon = epsilonValue;
@@ -114,24 +122,28 @@ function main() {
       process.exit(1);
     }
 
-    const func = program.functions[0];
+    const outputs: string[] = [];
 
-    if (program.functions.length > 1) {
-      console.warn(`Warning: Multiple functions found, processing only "${func.name}"`);
-    }
+    program.functions.forEach((func, index) => {
+      const env = inferFunction(func);
+      const gradients = computeFunctionGradients(func, env);
 
-    const env = inferFunction(func);
-    const gradients = computeFunctionGradients(func, env);
+      const guardAnalysis = analyzeGuards(func);
+      if (guardAnalysis.hasIssues) {
+        console.error('Function "' + func.name + '" may have edge cases:');
+        console.error(formatGuardWarnings(guardAnalysis));
+      }
 
-    // Analyze for edge cases
-    const guardAnalysis = analyzeGuards(func);
-    if (guardAnalysis.hasIssues) {
-      console.error(formatGuardWarnings(guardAnalysis));
-    }
+      const perFunctionOptions: CodeGenOptions = { ...options };
+      if (index > 0 && perFunctionOptions.includeComments !== false) {
+        perFunctionOptions.includeComments = false;
+      }
 
-    const code = generateComplete(func, gradients, env, options);
+      const code = generateComplete(func, gradients, env, perFunctionOptions);
+      outputs.push(code);
+    });
 
-    console.log(code);
+    console.log(outputs.join('\n\n'));
   } catch (err) {
     console.error('Error: Failed to process input file');
     if (err instanceof Error) {
@@ -146,3 +158,4 @@ function main() {
 }
 
 main();
+

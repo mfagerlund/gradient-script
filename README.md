@@ -239,8 +239,12 @@ Options:
   --no-simplify         Disable gradient simplification
   --no-cse              Disable common subexpression elimination
   --no-comments         Omit comments in generated code
+  --guards              Emit runtime guards for potential singularities
+  --epsilon <value>     Epsilon value for guards (default: 1e-10)
   --help, -h            Show help message
 ```
+
+GradientScript automatically generates gradient functions for all functions in your `.gs` file.
 
 **Examples:**
 ```bash

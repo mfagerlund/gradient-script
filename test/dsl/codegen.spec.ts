@@ -191,4 +191,28 @@ describe('DSL Code Generation', () => {
     // Should use x*x optimization for ^2
     expect(code).toMatch(/x \* .*\.x|Math\.pow/);
   });
+
+  it('reuses forward variables in gradients without CSE', () => {
+    const input = `
+      function rod(pix∇, piy∇, pjx∇, pjy∇, rest) {
+        dx = pix - pjx
+        dy = piy - pjy
+        len = sqrt(dx * dx + dy * dy)
+        return len - rest
+      }
+    `;
+
+    const program = parse(input);
+    const func = program.functions[0];
+    const env = inferFunction(func);
+    const gradients = computeFunctionGradients(func, env);
+
+    const code = generateGradientFunction(func, gradients, env, { cse: false });
+
+    expect(code).toMatch(/const dpix = .*dx/);
+    expect(code).toMatch(/const dpjy = .*dy/);
+    expect(code).not.toContain('(pix - pjx + pix - pjx)');
+    expect(code).not.toContain('(piy - pjy + piy - pjy)');
+  });
+
 });

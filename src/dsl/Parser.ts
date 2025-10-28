@@ -172,14 +172,16 @@ export class Parser {
    * variable = expression
    */
   private assignment(): Assignment {
-    const variable = this.consume(TokenType.IDENTIFIER, 'Expected variable name').value;
+    const varToken = this.consume(TokenType.IDENTIFIER, 'Expected variable name');
+    const variable = varToken.value;
     this.consume(TokenType.EQUALS, "Expected '=' in assignment");
     const expression = this.expression();
 
     return {
       kind: 'assignment',
       variable,
-      expression
+      expression,
+      loc: { line: varToken.line, column: varToken.column }
     };
   }
 
@@ -217,13 +219,15 @@ export class Parser {
     let expr = this.power();
 
     while (this.match(TokenType.MULTIPLY, TokenType.DIVIDE)) {
-      const operator = this.previous().value as '*' | '/';
+      const opToken = this.previous();
+      const operator = opToken.value as '*' | '/';
       const right = this.power();
       expr = {
         kind: 'binary',
         operator,
         left: expr,
-        right
+        right,
+        loc: { line: opToken.line, column: opToken.column }
       };
     }
 
@@ -277,6 +281,7 @@ export class Parser {
     while (true) {
       if (this.match(TokenType.LPAREN)) {
         // Function call
+        const startLoc = expr.loc || { line: this.previous().line, column: this.previous().column };
         const args = this.argumentList();
         this.consume(TokenType.RPAREN, "Expected ')' after arguments");
 
@@ -288,7 +293,8 @@ export class Parser {
         expr = {
           kind: 'call',
           name: expr.name,
-          args
+          args,
+          loc: startLoc
         };
       } else if (this.match(TokenType.DOT)) {
         // Component access

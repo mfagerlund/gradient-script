@@ -6,10 +6,19 @@
 import { Type } from './Types.js';
 
 /**
+ * Source location in the input file
+ */
+export interface SourceLocation {
+  line: number;
+  column: number;
+}
+
+/**
  * Base AST node
  */
 export interface ASTNode {
   type?: Type; // Type annotation (computed during type inference)
+  loc?: SourceLocation; // Source location (for error reporting)
 }
 
 /**

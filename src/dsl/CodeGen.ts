@@ -17,6 +17,7 @@ import {
 import { Type, Types, TypeEnv } from './Types.js';
 import { GradientResult, StructuredGradient } from './Differentiation.js';
 import { simplifyGradients } from './Simplify.js';
+import { ExpressionTransformer } from './ExpressionTransformer.js';
 import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions } from './CSE.js';
 import { CodeGenError } from './Errors.js';
 
@@ -31,7 +32,31 @@ export interface CodeGenOptions {
   epsilon?: number;  // Add epsilon guards for zero denominators
   emitGuards?: boolean;  // Emit runtime guards for edge cases
 }
-
+function expressionKey(expr: Expression): string {
+  switch (expr.kind) {
+    case 'number':
+      return `num(${expr.value})`;
+    case 'variable':
+      return `var(${expr.name})`;
+    case 'binary':
+      return `bin(${expr.operator},${expressionKey(expr.left)},${expressionKey(expr.right)})`;
+    case 'unary':
+      return `un(${expr.operator},${expressionKey(expr.operand)})`;
+    case 'call':
+      return `call(${expr.name},${expr.args.map(arg => expressionKey(arg)).join(',')})`;
+    case 'component':
+      return `comp(${expressionKey(expr.object)},${expr.component})`;
+  }
+}
+function shouldTrackForForwardReuse(expr: Expression): boolean {
+  switch (expr.kind) {
+    case 'number':
+    case 'variable':
+      return false;
+    default:
+      return true;
+  }
+}
 /**
  * Code generator for expressions
  */
@@ -293,28 +318,33 @@ export function generateGradientFunction(
 
   // Forward pass - compute intermediate variables
   // Track which expressions are already computed for CSE reuse
-  const forwardPassVars = new Map<string, string>();
+  const forwardExpressionMap = new Map<string, string>();
 
   for (const stmt of func.body) {
     if (stmt.kind === 'assignment') {
       const varName = stmt.variable;
-      const expr = codegen.generate(stmt.expression);
+      const generatedExpr = codegen.generate(stmt.expression);
 
-      // Track this for CSE reuse (store expression -> variable name mapping)
-      forwardPassVars.set(expr, varName);
+      if (shouldTrackForForwardReuse(stmt.expression)) {
+        const exprKey = expressionKey(stmt.expression);
+        if (!forwardExpressionMap.has(exprKey)) {
+          forwardExpressionMap.set(exprKey, varName);
+        }
+      }
 
       if (format === 'typescript' || format === 'javascript') {
-        lines.push(`  const ${varName} = ${expr};`);
+        lines.push(`  const ${varName} = ${generatedExpr};`);
       } else {
-        lines.push(`  ${varName} = ${expr}`);
+        lines.push(`  ${varName} = ${generatedExpr}`);
       }
     }
   }
 
   // Compute output value - reuse forward pass variables if possible
-  let valueExpr = func.returnExpr;
+  const valueExpr = func.returnExpr;
+  const valueKey = expressionKey(valueExpr);
+  const existingVar = forwardExpressionMap.get(valueKey);
   const valueCode = codegen.generate(valueExpr);
-  const existingVar = forwardPassVars.get(valueCode);
 
   if (existingVar) {
     // Reuse existing variable
@@ -330,7 +360,12 @@ export function generateGradientFunction(
     } else {
       lines.push(`  value = ${valueCode}`);
     }
+    if (shouldTrackForForwardReuse(valueExpr) && !forwardExpressionMap.has(valueKey)) {
+      forwardExpressionMap.set(valueKey, 'value');
+    }
   }
+
+  reuseForwardExpressionsInGradients(gradientsToUse.gradients, forwardExpressionMap);
 
   lines.push('');
 
@@ -557,6 +592,45 @@ export function generateComplete(
   lines.push(generateGradientFunction(func, gradients, env, options));
 
   return lines.join('\n');
+}
+
+class ForwardExpressionSubstituter extends ExpressionTransformer {
+  constructor(private readonly forwardExpressions: Map<string, string>) {
+    super();
+  }
+
+  override transform(expr: Expression): Expression {
+    const key = expressionKey(expr);
+    const varName = this.forwardExpressions.get(key);
+    if (varName) {
+      return {
+        kind: 'variable',
+        name: varName
+      };
+    }
+    return super.transform(expr);
+  }
+}
+
+function reuseForwardExpressionsInGradients(
+  gradients: Map<string, Expression | StructuredGradient>,
+  forwardExpressions: Map<string, string>
+): void {
+  if (forwardExpressions.size === 0) {
+    return;
+  }
+
+  const substituter = new ForwardExpressionSubstituter(forwardExpressions);
+
+  for (const [paramName, gradient] of gradients.entries()) {
+    if (isStructuredGradient(gradient)) {
+      for (const [component, expr] of gradient.components.entries()) {
+        gradient.components.set(component, substituter.transform(expr));
+      }
+    } else {
+      gradients.set(paramName, substituter.transform(gradient));
+    }
+  }
 }
 
 /**

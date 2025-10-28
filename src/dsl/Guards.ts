@@ -15,6 +15,8 @@ export interface Guard {
   expression: Expression;
   description: string;
   suggestion: string;
+  variableName?: string; // The assignment variable name if this is in an assignment
+  line?: number; // Line number in source
 }
 
 export interface GuardAnalysisResult {
@@ -29,12 +31,12 @@ export function analyzeGuards(func: FunctionDef): GuardAnalysisResult {
   const guards: Guard[] = [];
 
   // Analyze return expression
-  collectGuards(func.returnExpr, guards);
+  collectGuards(func.returnExpr, guards, undefined);
 
   // Analyze intermediate expressions
   for (const stmt of func.body) {
     if (stmt.kind === 'assignment') {
-      collectGuards(stmt.expression, guards);
+      collectGuards(stmt.expression, guards, stmt.variable, stmt.loc?.line);
     }
   }
 
@@ -47,7 +49,7 @@ export function analyzeGuards(func: FunctionDef): GuardAnalysisResult {
 /**
  * Collect potential guards from an expression
  */
-function collectGuards(expr: Expression, guards: Guard[]): void {
+function collectGuards(expr: Expression, guards: Guard[], variableName?: string, line?: number): void {
   switch (expr.kind) {
     case 'binary':
       if (expr.operator === '/') {
@@ -55,26 +57,28 @@ function collectGuards(expr: Expression, guards: Guard[]): void {
           type: 'division_by_zero',
           expression: expr.right,
           description: `Division by zero if denominator becomes zero`,
-          suggestion: `Add check: if (denominator === 0) return { value: 0, gradients: {...} };`
+          suggestion: `Add check: if (Math.abs(denominator) < epsilon) return {...};`,
+          variableName,
+          line: line || expr.loc?.line
         });
       }
-      collectGuards(expr.left, guards);
-      collectGuards(expr.right, guards);
+      collectGuards(expr.left, guards, variableName, line);
+      collectGuards(expr.right, guards, variableName, line);
       break;
 
     case 'unary':
-      collectGuards(expr.operand, guards);
+      collectGuards(expr.operand, guards, variableName, line);
       break;
 
     case 'call':
-      analyzeCallGuards(expr, guards);
+      analyzeCallGuards(expr, guards, variableName, line || expr.loc?.line);
       for (const arg of expr.args) {
-        collectGuards(arg, guards);
+        collectGuards(arg, guards, variableName, line);
       }
       break;
 
     case 'component':
-      collectGuards(expr.object, guards);
+      collectGuards(expr.object, guards, variableName, line);
       break;
   }
 }
@@ -82,25 +86,37 @@ function collectGuards(expr: Expression, guards: Guard[]): void {
 /**
  * Analyze function calls for specific edge cases
  */
-function analyzeCallGuards(expr: FunctionCall, guards: Guard[]): void {
+function analyzeCallGuards(expr: FunctionCall, guards: Guard[], variableName?: string, line?: number): void {
   switch (expr.name) {
     case 'sqrt':
+      // Check if it's sqrt of sum of squares (always safe)
+      const arg = expr.args[0];
+      const isSumOfSquares = arg.kind === 'binary' && arg.operator === '+' &&
+        isSqExpression(arg.left) && isSqExpression(arg.right);
+
       guards.push({
         type: 'sqrt_negative',
         expression: expr.args[0],
-        description: `sqrt of negative number produces NaN`,
-        suggestion: `Add check: Math.max(0, value) or abs(value)`
+        description: isSumOfSquares
+          ? `sqrt of sum of squares (safe, but can be zero)`
+          : `sqrt of negative number produces NaN`,
+        suggestion: isSumOfSquares
+          ? `Add epsilon for numerical stability: sqrt(max(dx*dx + dy*dy, epsilon))`
+          : `Guard negative values: sqrt(max(0, value))`,
+        variableName,
+        line
       });
       break;
 
     case 'magnitude2d':
     case 'magnitude3d':
-      // magnitude uses sqrt internally
       guards.push({
         type: 'sqrt_negative',
         expression: expr,
-        description: `magnitude of vector (uses sqrt internally)`,
-        suggestion: `Ensure vector components are valid`
+        description: `magnitude uses sqrt internally (safe, but can be zero)`,
+        suggestion: `Gradients may have division by zero when magnitude is zero`,
+        variableName,
+        line
       });
       break;
 
@@ -110,7 +126,9 @@ function analyzeCallGuards(expr: FunctionCall, guards: Guard[]): void {
         type: 'normalize_zero',
         expression: expr,
         description: `Normalizing zero vector causes division by zero`,
-        suggestion: `Check if magnitude > epsilon before normalizing`
+        suggestion: `if (magnitude < epsilon) return zero vector or skip normalization`,
+        variableName,
+        line
       });
       break;
 
@@ -118,8 +136,10 @@ function analyzeCallGuards(expr: FunctionCall, guards: Guard[]): void {
       guards.push({
         type: 'atan2_zero',
         expression: expr,
-        description: `atan2(0, 0) is undefined`,
-        suggestion: `Check if both arguments are zero: if (y === 0 && x === 0) return 0;`
+        description: `atan2(0, 0) is undefined and gradients have division by zero`,
+        suggestion: `if (y === 0 && x === 0) return 0 with zero gradients`,
+        variableName,
+        line
       });
       break;
 
@@ -128,7 +148,9 @@ function analyzeCallGuards(expr: FunctionCall, guards: Guard[]): void {
         type: 'division_by_zero',
         expression: expr.args[0],
         description: `log(0) is -Infinity, log(negative) is NaN`,
-        suggestion: `Add check: Math.max(epsilon, value)`
+        suggestion: `Clamp to positive: log(max(epsilon, value))`,
+        variableName,
+        line
       });
       break;
 
@@ -138,10 +160,32 @@ function analyzeCallGuards(expr: FunctionCall, guards: Guard[]): void {
         type: 'division_by_zero',
         expression: expr.args[0],
         description: `${expr.name} requires argument in [-1, 1]`,
-        suggestion: `Clamp value: Math.max(-1, Math.min(1, value))`
+        suggestion: `Clamp: ${expr.name}(max(-1, min(1, value)))`,
+        variableName,
+        line
       });
       break;
   }
+}
+
+/**
+ * Check if expression is a squared term (x^2 or x*x)
+ */
+function isSqExpression(expr: Expression): boolean {
+  if (expr.kind === 'binary') {
+    if (expr.operator === '*') {
+      // Check if x * x
+      if (expr.left.kind === 'variable' && expr.right.kind === 'variable') {
+        return expr.left.name === expr.right.name;
+      }
+    } else if (expr.operator === '^' || expr.operator === '**') {
+      // Check if x^2
+      if (expr.right.kind === 'number' && expr.right.value === 2) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -156,29 +200,30 @@ export function formatGuardWarnings(result: GuardAnalysisResult): string {
   lines.push('⚠️  EDGE CASE WARNINGS:');
   lines.push('');
   lines.push('The generated code may encounter edge cases that produce');
-  lines.push('NaN, Infinity, or incorrect results:');
+  lines.push('NaN, Infinity, or incorrect gradients:');
   lines.push('');
 
-  // Group by type
-  const byType = new Map<string, Guard[]>();
+  // Show each guard individually with context
   for (const guard of result.guards) {
-    const existing = byType.get(guard.type) || [];
-    existing.push(guard);
-    byType.set(guard.type, existing);
-  }
+    const typeLabel = formatGuardType(guard.type);
 
-  for (const [type, guards] of byType.entries()) {
-    const typeLabel = formatGuardType(type);
-    lines.push(`  • ${typeLabel} (${guards.length} occurrence${guards.length > 1 ? 's' : ''})`);
+    // Show location and variable if available
+    let location = '  •';
+    if (guard.line) {
+      location += ` Line ${guard.line}:`;
+    }
+    if (guard.variableName) {
+      location += ` ${guard.variableName} =`;
+    }
 
-    // Show first occurrence
-    const first = guards[0];
-    lines.push(`    ${first.description}`);
-    lines.push(`    💡 ${first.suggestion}`);
+    lines.push(location);
+    lines.push(`    ${typeLabel}: ${guard.description}`);
+    lines.push(`    💡 Fix: ${guard.suggestion}`);
     lines.push('');
   }
 
-  lines.push('Consider adding runtime checks or ensuring inputs are within valid ranges.');
+  lines.push('Add runtime checks or ensure inputs are within valid ranges.');
+  lines.push('Use --guards --epsilon 1e-10 to automatically emit epsilon guards.');
   lines.push('');
 
   return lines.join('\n');

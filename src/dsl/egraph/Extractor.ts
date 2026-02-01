@@ -96,14 +96,26 @@ export function extractWithCSE(
     }
   }
 
-  // Extract temp definitions (base expressions without temp substitution)
+  // Sort temps by cost (ascending) so simpler temps are extracted first
+  // This allows more complex temps to reference simpler ones
+  const sortedTemps = Array.from(tempsToExtract.entries()).sort((a, b) => {
+    const costA = costs.get(egraph.find(a[0])) ?? Infinity;
+    const costB = costs.get(egraph.find(b[0])) ?? Infinity;
+    return costA - costB;
+  });
+
+  // Extract temp definitions in order, allowing later temps to use earlier ones
   const temps = new Map<string, Expression>();
-  for (const [classId, tempName] of tempsToExtract) {
-    const expr = extractFromClass(egraph, classId, costs, costModel);
+  const extractedTempIds = new Map<EClassId, string>(); // Track which classes have been extracted as temps
+
+  for (const [classId, tempName] of sortedTemps) {
+    // Extract using temps that have already been extracted
+    const expr = extractWithTemps(egraph, classId, costs, costModel, extractedTempIds);
     temps.set(tempName, expr);
+    extractedTempIds.set(egraph.find(classId), tempName);
   }
 
-  // Extract root expressions, using temps where available
+  // Extract root expressions, using all temps
   const expressions = new Map<EClassId, Expression>();
   for (const rootId of roots) {
     const expr = extractWithTemps(egraph, rootId, costs, costModel, tempsToExtract);

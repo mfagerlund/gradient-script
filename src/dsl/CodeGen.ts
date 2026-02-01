@@ -602,12 +602,14 @@ export function generateGradientFunction(
     const denomExpr = denominatorExprs.get(denomKey);
     if (denomExpr) {
       const code = codegen.generate(denomExpr);
+      // Wrap in parens if it's a compound expression to preserve precedence
+      const safeCode = needsParens(denomExpr) ? `(${code})` : code;
       if (format === 'typescript' || format === 'javascript') {
-        lines.push(`  const ${invVarName} = 1 / ${code};`);
+        lines.push(`  const ${invVarName} = 1 / ${safeCode};`);
       } else if (format === 'python') {
-        lines.push(`  ${invVarName} = 1 / ${code}`);
+        lines.push(`  ${invVarName} = 1 / ${safeCode}`);
       } else if (format === 'csharp') {
-        lines.push(`    ${csharpFloatType} ${invVarName} = 1 / ${code};`);
+        lines.push(`    ${csharpFloatType} ${invVarName} = 1 / ${safeCode};`);
       }
     }
   }
@@ -630,12 +632,13 @@ export function generateGradientFunction(
         const denomExpr = denominatorExprs.get(invInfo.denomKey);
         if (denomExpr) {
           const invCode = codegen.generate(denomExpr);
+          const safeInvCode = needsParens(denomExpr) ? `(${invCode})` : invCode;
           if (format === 'typescript' || format === 'javascript') {
-            lines.push(`  const ${invInfo.invVarName} = 1 / ${invCode};`);
+            lines.push(`  const ${invInfo.invVarName} = 1 / ${safeInvCode};`);
           } else if (format === 'python') {
-            lines.push(`  ${invInfo.invVarName} = 1 / ${invCode}`);
+            lines.push(`  ${invInfo.invVarName} = 1 / ${safeInvCode}`);
           } else if (format === 'csharp') {
-            lines.push(`    ${csharpFloatType} ${invInfo.invVarName} = 1 / ${invCode};`);
+            lines.push(`    ${csharpFloatType} ${invInfo.invVarName} = 1 / ${safeInvCode};`);
           }
         }
       }
@@ -982,6 +985,14 @@ function findDenominatorByKey(expr: Expression, targetKey: string): Expression |
     default:
       return null;
   }
+}
+
+/**
+ * Check if an expression needs parentheses when used as a divisor
+ */
+function needsParens(expr: Expression): boolean {
+  // Binary operations and unary minus need parens to avoid precedence issues
+  return expr.kind === 'binary' || (expr.kind === 'unary' && expr.operator === '-');
 }
 
 /**

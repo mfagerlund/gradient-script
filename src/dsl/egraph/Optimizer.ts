@@ -67,7 +67,7 @@ export function optimizeWithEGraph(
     maxIterations = 30,
     ruleSets = ['core', 'algebra'],
     phased = true,
-    minSharedCost = 3,
+    minSharedCost = 2,
     costModel = defaultCostModel,
     verbose = false
   } = options;

@@ -124,6 +124,12 @@ export const algebraRules: Rule[] = [
   rule('inv-1', '(inv 1)', '1'),
   rule('inv-inv', '(inv (inv ?a))', '?a'),
   rule('div-1-to-inv', '(/ 1 ?a)', '(inv ?a)'),
+  rule('mul-inv-cancel', '(* ?a (inv ?a))', '1'),  // a * (1/a) = 1
+  rule('inv-mul', '(inv (* ?a ?b))', '(* (inv ?a) (inv ?b))'),  // 1/(a*b) = (1/a)*(1/b)
+  rule('div-self-sq', '(/ ?a (* ?a ?a))', '(inv ?a)'),  // a / (a*a) = 1/a
+  rule('div-sq-self', '(/ (* ?a ?a) ?a)', '?a'),  // (a*a) / a = a
+  rule('div-self-pow2', '(/ ?a (^ ?a 2))', '(inv ?a)'),  // a / a^2 = 1/a
+  rule('div-pow2-self', '(/ (^ ?a 2) ?a)', '?a'),  // a^2 / a = a
 
   // === Power rules ===
   rule('pow-2', '(^ ?a 2)', '(* ?a ?a)'),

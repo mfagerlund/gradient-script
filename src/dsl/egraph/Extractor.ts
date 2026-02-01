@@ -292,6 +292,9 @@ export function extractWithCSE(
   // Detect and merge (a-b) / (b-a) patterns (these are negatives of each other)
   mergeNegativePairs(temps, expressions);
 
+  // Normalize patterns like a + -1 * b to a - b (cleanup from e-graph extraction)
+  normalizeAddNegMul(temps, expressions);
+
   // Calculate total cost
   let totalCost = 0;
   for (const [, expr] of temps) {
@@ -1159,4 +1162,74 @@ function replaceTempWithNegation(
 
   // Delete the old temp - its uses have been replaced with -newTemp
   temps.delete(oldTemp);
+}
+
+/**
+ * Normalize patterns like a + -1 * b to a - b
+ * This cleans up cases where e-graph extraction picked the wrong form
+ */
+function normalizeAddNegMul(
+  temps: Map<string, Expression>,
+  expressions: Map<EClassId, Expression>
+): void {
+  function normalize(expr: Expression): Expression {
+    if (expr.kind === 'number' || expr.kind === 'variable') return expr;
+
+    // First normalize children
+    if (expr.kind === 'binary') {
+      const left = normalize(expr.left);
+      const right = normalize(expr.right);
+
+      // Check for a + (-1 * b) pattern: convert to a - b
+      if (expr.operator === '+' && right.kind === 'binary' && right.operator === '*') {
+        if (right.left.kind === 'number' && right.left.value === -1) {
+          return { kind: 'binary', operator: '-', left, right: normalize(right.right) };
+        }
+        if (right.right.kind === 'number' && right.right.value === -1) {
+          return { kind: 'binary', operator: '-', left, right: normalize(right.left) };
+        }
+      }
+
+      // Check for (-1 * b) + a pattern: convert to a - b
+      if (expr.operator === '+' && left.kind === 'binary' && left.operator === '*') {
+        if (left.left.kind === 'number' && left.left.value === -1) {
+          return { kind: 'binary', operator: '-', left: right, right: normalize(left.right) };
+        }
+        if (left.right.kind === 'number' && left.right.value === -1) {
+          return { kind: 'binary', operator: '-', left: right, right: normalize(left.left) };
+        }
+      }
+
+      return (left === expr.left && right === expr.right)
+        ? expr
+        : { kind: 'binary', operator: expr.operator, left, right };
+    }
+
+    if (expr.kind === 'unary') {
+      const operand = normalize(expr.operand);
+      return (operand === expr.operand) ? expr : { kind: 'unary', operator: expr.operator, operand };
+    }
+
+    if (expr.kind === 'call') {
+      const args = expr.args.map(normalize);
+      return args.every((a, i) => a === expr.args[i]) ? expr : { kind: 'call', name: expr.name, args };
+    }
+
+    if (expr.kind === 'component') {
+      const object = normalize(expr.object);
+      return (object === expr.object) ? expr : { kind: 'component', object, component: expr.component };
+    }
+
+    return expr;
+  }
+
+  // Normalize all temps
+  for (const [name, expr] of temps) {
+    temps.set(name, normalize(expr));
+  }
+
+  // Normalize root expressions
+  for (const [rootId, expr] of expressions) {
+    expressions.set(rootId, normalize(expr));
+  }
 }

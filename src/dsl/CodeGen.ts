@@ -116,9 +116,11 @@ export class ExpressionCodeGen {
           } else if (exponent === 1) {
             return left;
           } else if (exponent === 2) {
-            return `${left} * ${left}`;
+            // Wrap in parens because we're changing ^ (precedence 3) to * (precedence 2)
+            // Without parens, a / b^2 would become a / b * b instead of a / (b * b)
+            return `(${left} * ${left})`;
           } else if (exponent === 3) {
-            return `${left} * ${left} * ${left}`;
+            return `(${left} * ${left} * ${left})`;
           }
         }
       }
@@ -620,10 +622,14 @@ export function generateGradientFunction(
 
   if (shouldApplyCSE) {
     // Collect all gradient components into a single map for global optimization
+    // Include both structured and scalar gradients (scalar uses 'value' as component)
     const allGradientComponents = new Map<string, Map<string, Expression>>();
     for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
       if (isStructuredGradient(gradient)) {
         allGradientComponents.set(paramName, gradient.components);
+      } else {
+        // Scalar gradient - wrap as a single 'value' component
+        allGradientComponents.set(paramName, new Map([['value', gradient as Expression]]));
       }
     }
 
@@ -636,6 +642,12 @@ export function generateGradientFunction(
       const gradient = gradientsToUse.gradients.get(paramName);
       if (gradient && isStructuredGradient(gradient)) {
         gradient.components = simplifiedComponents;
+      } else {
+        // Scalar gradient - unwrap from 'value' component
+        const optimizedExpr = simplifiedComponents.get('value');
+        if (optimizedExpr) {
+          gradientsToUse.gradients.set(paramName, optimizedExpr);
+        }
       }
     }
 
@@ -649,6 +661,9 @@ export function generateGradientFunction(
         for (const [comp, expr] of gradient.components.entries()) {
           gradient.components.set(comp, simplifyPostCSE(expr));
         }
+      } else {
+        // Scalar gradient - apply post-CSE simplification
+        gradientsToUse.gradients.set(paramName, simplifyPostCSE(gradient as Expression));
       }
     }
   }

@@ -124,6 +124,9 @@ For more information and examples:
 
   README (raw, LLM-friendly):
   https://raw.githubusercontent.com/mfagerlund/gradient-script/main/README.md
+
+  LLM Optimization Guide (for AI agents writing .gs files):
+  https://raw.githubusercontent.com/mfagerlund/gradient-script/main/docs/LLM-OPTIMIZATION-GUIDE.md
   `.trim());
 }
 function main() {

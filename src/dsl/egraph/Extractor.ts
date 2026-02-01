@@ -96,30 +96,37 @@ export function extractWithCSE(
     }
   }
 
-  // Sort temps by cost (ascending) so simpler temps are extracted first
-  // This allows more complex temps to reference simpler ones
-  const sortedTemps = Array.from(tempsToExtract.entries()).sort((a, b) => {
-    const costA = costs.get(egraph.find(a[0])) ?? Infinity;
-    const costB = costs.get(egraph.find(b[0])) ?? Infinity;
-    return costA - costB;
-  });
-
-  // Extract temp definitions in order, allowing later temps to use earlier ones
+  // Extract temp definitions (without referencing other temps initially)
   const temps = new Map<string, Expression>();
-  const extractedTempIds = new Map<EClassId, string>(); // Track which classes have been extracted as temps
-
-  for (const [classId, tempName] of sortedTemps) {
-    // Extract using temps that have already been extracted
-    const expr = extractWithTemps(egraph, classId, costs, costModel, extractedTempIds);
+  for (const [classId, tempName] of tempsToExtract) {
+    const expr = extractFromClass(egraph, classId, costs, costModel);
     temps.set(tempName, expr);
-    extractedTempIds.set(egraph.find(classId), tempName);
   }
 
-  // Extract root expressions, using all temps
+  // Extract root expressions, using temps where available
   const expressions = new Map<EClassId, Expression>();
   for (const rootId of roots) {
     const expr = extractWithTemps(egraph, rootId, costs, costModel, tempsToExtract);
     expressions.set(rootId, expr);
+  }
+
+  // Post-process: substitute temps into other temp definitions where possible
+  // Build a map from expression serialization to temp name
+  const exprToTemp = new Map<string, string>();
+  for (const [tempName, expr] of temps) {
+    exprToTemp.set(serializeExpr(expr), tempName);
+  }
+
+  // Substitute temps into temp definitions
+  for (const [tempName, expr] of temps) {
+    temps.set(tempName, substituteTempRefs(expr, exprToTemp, tempName));
+  }
+
+  // Topologically sort temps by dependency (deps first)
+  const sortedTemps = topologicalSortTemps(temps);
+  temps.clear();
+  for (const [name, expr] of sortedTemps) {
+    temps.set(name, expr);
   }
 
   // Count actual usage of each temp in the final output
@@ -139,7 +146,13 @@ export function extractWithCSE(
     }
   }
 
+  // Count in root expressions
   for (const expr of expressions.values()) {
+    countTempUsage(expr);
+  }
+
+  // Also count in temp definitions (temps can reference other temps)
+  for (const expr of temps.values()) {
     countTempUsage(expr);
   }
 
@@ -569,4 +582,141 @@ function expressionCost(expr: Expression, costModel: CostModel): number {
     case 'component':
       return costModel.component + expressionCost(expr.object, costModel);
   }
+}
+
+/**
+ * Serialize an expression to a string for comparison
+ */
+function serializeExpr(expr: Expression): string {
+  switch (expr.kind) {
+    case 'number':
+      return `N${expr.value}`;
+    case 'variable':
+      return `V${expr.name}`;
+    case 'binary':
+      return `(${serializeExpr(expr.left)}${expr.operator}${serializeExpr(expr.right)})`;
+    case 'unary':
+      return `U${expr.operator}${serializeExpr(expr.operand)}`;
+    case 'call':
+      return `C${expr.name}(${expr.args.map(serializeExpr).join(',')})`;
+    case 'component':
+      return `${serializeExpr(expr.object)}.${expr.component}`;
+  }
+}
+
+/**
+ * Substitute temp references into an expression (bottom-up)
+ * Looks for subexpressions that match other temps and replaces them
+ */
+function substituteTempRefs(
+  expr: Expression,
+  exprToTemp: Map<string, string>,
+  currentTemp: string
+): Expression {
+  // First, recursively substitute in children (bottom-up)
+  let result: Expression;
+  switch (expr.kind) {
+    case 'number':
+    case 'variable':
+      result = expr;
+      break;
+    case 'binary': {
+      const left = substituteTempRefs(expr.left, exprToTemp, currentTemp);
+      const right = substituteTempRefs(expr.right, exprToTemp, currentTemp);
+      result = (left === expr.left && right === expr.right)
+        ? expr
+        : { kind: 'binary', operator: expr.operator, left, right };
+      break;
+    }
+    case 'unary': {
+      const operand = substituteTempRefs(expr.operand, exprToTemp, currentTemp);
+      result = (operand === expr.operand)
+        ? expr
+        : { kind: 'unary', operator: expr.operator, operand };
+      break;
+    }
+    case 'call': {
+      const args = expr.args.map(arg => substituteTempRefs(arg, exprToTemp, currentTemp));
+      result = args.every((arg, i) => arg === expr.args[i])
+        ? expr
+        : { kind: 'call', name: expr.name, args };
+      break;
+    }
+    case 'component': {
+      const object = substituteTempRefs(expr.object, exprToTemp, currentTemp);
+      result = (object === expr.object)
+        ? expr
+        : { kind: 'component', object, component: expr.component };
+      break;
+    }
+  }
+
+  // Then check if the (possibly transformed) expression matches another temp
+  const serialized = serializeExpr(result);
+  const matchingTemp = exprToTemp.get(serialized);
+  if (matchingTemp && matchingTemp !== currentTemp) {
+    return { kind: 'variable', name: matchingTemp };
+  }
+
+  return result;
+}
+
+/**
+ * Topologically sort temps so dependencies come first
+ */
+function topologicalSortTemps(temps: Map<string, Expression>): [string, Expression][] {
+  // Find dependencies of each temp
+  const deps = new Map<string, Set<string>>();
+  const tempNames = new Set(temps.keys());
+
+  function findDeps(expr: Expression, found: Set<string>): void {
+    if (expr.kind === 'variable' && tempNames.has(expr.name)) {
+      found.add(expr.name);
+    } else if (expr.kind === 'binary') {
+      findDeps(expr.left, found);
+      findDeps(expr.right, found);
+    } else if (expr.kind === 'unary') {
+      findDeps(expr.operand, found);
+    } else if (expr.kind === 'call') {
+      expr.args.forEach(arg => findDeps(arg, found));
+    } else if (expr.kind === 'component') {
+      findDeps(expr.object, found);
+    }
+  }
+
+  for (const [name, expr] of temps) {
+    const d = new Set<string>();
+    findDeps(expr, d);
+    deps.set(name, d);
+  }
+
+  // Topological sort using Kahn's algorithm
+  const result: [string, Expression][] = [];
+  const remaining = new Set(temps.keys());
+  const processed = new Set<string>();
+
+  while (remaining.size > 0) {
+    // Find a temp with no unprocessed dependencies
+    let found = false;
+    for (const name of remaining) {
+      const d = deps.get(name)!;
+      const hasUnprocessedDep = [...d].some(dep => !processed.has(dep));
+      if (!hasUnprocessedDep) {
+        result.push([name, temps.get(name)!]);
+        remaining.delete(name);
+        processed.add(name);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // Cycle detected - just add remaining in any order
+      for (const name of remaining) {
+        result.push([name, temps.get(name)!]);
+      }
+      break;
+    }
+  }
+
+  return result;
 }

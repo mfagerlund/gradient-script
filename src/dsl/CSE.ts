@@ -189,7 +189,10 @@ export function eliminateCommonSubexpressionsGlobal(
   // Dead code elimination: remove temps that are never used
   const finalIntermediates = eliminateDeadTemps(processedIntermediates, simplifiedGradients);
 
-  return { intermediates: finalIntermediates, gradients: simplifiedGradients };
+  // Topologically sort temps so dependencies come first
+  const sortedIntermediates = topologicallySortTemps(finalIntermediates);
+
+  return { intermediates: sortedIntermediates, gradients: simplifiedGradients };
 }
 
 /**
@@ -536,4 +539,65 @@ function substituteInExpression(
 ): Expression {
   const transformer = new PatternSubstitutionTransformer(pattern, replacement, counter);
   return transformer.transform(expr);
+}
+
+/**
+ * Topologically sort temps so dependencies come first
+ * This ensures that when temp A references temp B, B is defined before A
+ */
+function topologicallySortTemps(temps: Map<string, Expression>): Map<string, Expression> {
+  // Build dependency graph: which temps does each temp depend on?
+  const deps = new Map<string, Set<string>>();
+  const tempNames = new Set(temps.keys());
+
+  function findDeps(expr: Expression, found: Set<string>): void {
+    if (expr.kind === 'variable' && tempNames.has(expr.name)) {
+      found.add(expr.name);
+    } else if (expr.kind === 'binary') {
+      findDeps(expr.left, found);
+      findDeps(expr.right, found);
+    } else if (expr.kind === 'unary') {
+      findDeps(expr.operand, found);
+    } else if (expr.kind === 'call') {
+      expr.args.forEach(arg => findDeps(arg, found));
+    } else if (expr.kind === 'component') {
+      findDeps(expr.object, found);
+    }
+  }
+
+  for (const [name, expr] of temps) {
+    const d = new Set<string>();
+    findDeps(expr, d);
+    deps.set(name, d);
+  }
+
+  // Topological sort using Kahn's algorithm
+  const result = new Map<string, Expression>();
+  const remaining = new Set(temps.keys());
+  const processed = new Set<string>();
+
+  while (remaining.size > 0) {
+    // Find a temp with no unprocessed dependencies
+    let found = false;
+    for (const name of remaining) {
+      const d = deps.get(name)!;
+      const hasUnprocessedDep = [...d].some(dep => !processed.has(dep));
+      if (!hasUnprocessedDep) {
+        result.set(name, temps.get(name)!);
+        remaining.delete(name);
+        processed.add(name);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // Cycle detected - just add remaining in any order
+      for (const name of remaining) {
+        result.set(name, temps.get(name)!);
+      }
+      break;
+    }
+  }
+
+  return result;
 }

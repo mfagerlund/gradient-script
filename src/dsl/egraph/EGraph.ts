@@ -327,6 +327,7 @@ export class EGraph {
       case 'div': return `(/ e${node.children[0]} e${node.children[1]})`;
       case 'pow': return `(^ e${node.children[0]} e${node.children[1]})`;
       case 'neg': return `(neg e${node.child})`;
+      case 'inv': return `(inv e${node.child})`;
       case 'call': return `(${node.name} ${node.children.map(c => `e${c}`).join(' ')})`;
       case 'component': return `(. e${node.object} ${node.field})`;
     }

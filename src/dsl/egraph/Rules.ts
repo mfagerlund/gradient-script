@@ -117,8 +117,13 @@ export const algebraRules: Rule[] = [
   rule('sub-to-add', '(- ?a ?b)', '(+ ?a (neg ?b))'),
   rule('add-neg-to-sub', '(+ ?a (neg ?b))', '(- ?a ?b)'),
 
-  // === Division to multiplication ===
-  rule('div-to-mul-inv', '(/ ?a ?b)', '(* ?a (/ 1 ?b))'),
+  // === Division to multiplication by inverse ===
+  rule('div-to-mul-inv', '(/ ?a ?b)', '(* ?a (inv ?b))'),
+
+  // === Inverse rules ===
+  rule('inv-1', '(inv 1)', '1'),
+  rule('inv-inv', '(inv (inv ?a))', '?a'),
+  rule('div-1-to-inv', '(/ 1 ?a)', '(inv ?a)'),
 
   // === Power rules ===
   rule('pow-2', '(^ ?a 2)', '(* ?a ?a)'),

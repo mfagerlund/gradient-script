@@ -170,7 +170,9 @@ function main() {
     } else if (arg === '--no-cse') {
       options.cse = false;
     } else if (arg === '--egraph') {
-      options.useEGraph = true;
+      options.useEGraph = true;  // Already default, kept for backwards compatibility
+    } else if (arg === '--no-egraph') {
+      options.useEGraph = false;
     } else if (arg === '--no-comments') {
       options.includeComments = false;
     } else if (arg === '--guards') {

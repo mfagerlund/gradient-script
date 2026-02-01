@@ -38,6 +38,9 @@ export interface EGraphOptimizeOptions {
   /** Maximum saturation iterations (default: 30) */
   maxIterations?: number;
 
+  /** Maximum e-graph size before stopping saturation (default: 15000) */
+  maxClassSize?: number;
+
   /** Which rule sets to use (default: ['core', 'algebra']) */
   ruleSets?: ('core' | 'algebra' | 'function')[];
 
@@ -65,6 +68,7 @@ export function optimizeWithEGraph(
 ): EGraphOptimizeResult {
   const {
     maxIterations = 30,
+    maxClassSize = 15000,
     ruleSets = ['core', 'algebra'],
     phased = true,
     minSharedCost = 2,
@@ -92,9 +96,9 @@ export function optimizeWithEGraph(
     if (ruleSets.includes('algebra')) phases.push(algebraRules);
     if (ruleSets.includes('function')) phases.push(functionRules);
 
-    stats = saturatePhased(egraph, phases, { maxIterations, verbose });
+    stats = saturatePhased(egraph, phases, { maxIterations, maxClassSize, verbose });
   } else {
-    stats = saturate(egraph, rules, { maxIterations, verbose });
+    stats = saturate(egraph, rules, { maxIterations, maxClassSize, verbose });
   }
 
   if (verbose) {

@@ -20,6 +20,7 @@ export type Pattern =
   | { tag: 'pdiv'; left: Pattern; right: Pattern }
   | { tag: 'ppow'; left: Pattern; right: Pattern }
   | { tag: 'pneg'; child: Pattern }
+  | { tag: 'pinv'; child: Pattern }            // (inv ?a) - reciprocal
   | { tag: 'pcall'; name: string; args: Pattern[] };
 
 /**
@@ -64,6 +65,9 @@ export function parsePattern(input: string): Pattern {
       if (op === 'neg') {
         const child = parseExpr();
         result = { tag: 'pneg', child };
+      } else if (op === 'inv') {
+        const child = parseExpr();
+        result = { tag: 'pinv', child };
       } else if (['+', '-', '*', '/', '^'].includes(op)) {
         const left = parseExpr();
         const right = parseExpr();
@@ -261,6 +265,12 @@ function matchNodeWithPattern(
       }
       return [];
 
+    case 'pinv':
+      if (node.tag === 'inv') {
+        return matchPatternWithSubst(egraph, pattern.child, node.child, subst, depth + 1);
+      }
+      return [];
+
     case 'pcall':
       if (node.tag === 'call' && node.name === pattern.name && node.children.length === pattern.args.length) {
         return matchCallChildren(egraph, pattern.args, node.children, subst, depth);
@@ -375,6 +385,11 @@ export function instantiatePattern(
       return egraph.add({ tag: 'neg', child });
     }
 
+    case 'pinv': {
+      const child = instantiatePattern(egraph, pattern.child, subst);
+      return egraph.add({ tag: 'inv', child });
+    }
+
     case 'pcall': {
       const args = pattern.args.map(arg => instantiatePattern(egraph, arg, subst));
       return egraph.add({ tag: 'call', name: pattern.name, children: args });
@@ -395,6 +410,7 @@ export function patternToString(pattern: Pattern): string {
     case 'pdiv': return `(/ ${patternToString(pattern.left)} ${patternToString(pattern.right)})`;
     case 'ppow': return `(^ ${patternToString(pattern.left)} ${patternToString(pattern.right)})`;
     case 'pneg': return `(neg ${patternToString(pattern.child)})`;
+    case 'pinv': return `(inv ${patternToString(pattern.child)})`;
     case 'pcall': return `(${pattern.name} ${pattern.args.map(patternToString).join(' ')})`;
   }
 }

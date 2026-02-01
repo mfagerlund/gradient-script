@@ -22,6 +22,7 @@ export interface CostModel {
   div: number;       // Division (expensive!)
   pow: number;       // Power
   neg: number;       // Negation
+  inv: number;       // Inverse (1/x)
   call: number;      // Function call base cost
   component: number; // Component access (e.g., v.x)
 }
@@ -38,6 +39,7 @@ export const defaultCostModel: CostModel = {
   div: 8,        // Division is expensive - encourage factoring
   pow: 4,
   neg: 1,
+  inv: 5,        // Inverse (1/x) - cheaper than div but significant
   call: 3,
   component: 1,
 };
@@ -200,6 +202,13 @@ export function extractWithCSE(
       return expr;
     }
 
+    // Inline in remaining temps (temps not being inlined)
+    for (const [tempName, expr] of temps) {
+      if (!tempsToInline.has(tempName)) {
+        temps.set(tempName, inlineTemps(expr));
+      }
+    }
+
     // Inline in root expressions
     for (const [rootId, expr] of expressions) {
       expressions.set(rootId, inlineTemps(expr));
@@ -209,7 +218,18 @@ export function extractWithCSE(
     for (const tempName of tempsToInline) {
       temps.delete(tempName);
     }
+
+    // Re-sort topologically after inlining (inlining may have changed dependencies)
+    const reSorted = topologicalSortTemps(temps);
+    temps.clear();
+    for (const [name, expr] of reSorted) {
+      temps.set(name, expr);
+    }
   }
+
+  // Post-extraction CSE: find repeated patterns that emerge AFTER temp substitution
+  // e.g., "_tmp22 + _tmp23" appearing multiple times
+  postExtractionCSE(temps, expressions, minSharedCost, tempCounter, costModel);
 
   // Calculate total cost
   let totalCost = 0;
@@ -290,6 +310,8 @@ function computeNodeCost(
       return costModel.pow + childCost(node.children[0]) + childCost(node.children[1]);
     case 'neg':
       return costModel.neg + childCost(node.child);
+    case 'inv':
+      return costModel.inv + childCost(node.child);
     case 'call':
       return costModel.call + node.children.reduce((sum, id) => sum + childCost(id), 0);
     case 'component':
@@ -422,6 +444,14 @@ function nodeToExpression(
         operator: '-',
         operand: extractFromClass(egraph, node.child, costs, costModel)
       };
+    case 'inv':
+      // inv(x) extracts as 1/x
+      return {
+        kind: 'binary',
+        operator: '/',
+        left: { kind: 'number', value: 1 },
+        right: extractFromClass(egraph, node.child, costs, costModel)
+      };
     case 'call':
       return {
         kind: 'call',
@@ -494,6 +524,14 @@ function nodeToExpressionWithTemps(
         kind: 'unary',
         operator: '-',
         operand: extract(node.child)
+      };
+    case 'inv':
+      // inv(x) extracts as 1/x
+      return {
+        kind: 'binary',
+        operator: '/',
+        left: { kind: 'number', value: 1 },
+        right: extract(node.child)
       };
     case 'call':
       return {
@@ -719,4 +757,270 @@ function topologicalSortTemps(temps: Map<string, Expression>): [string, Expressi
   }
 
   return result;
+}
+
+/**
+ * Post-extraction CSE: find repeated patterns that emerge AFTER temp substitution
+ * e.g., "_tmp22 + _tmp23" appearing multiple times should become its own temp
+ */
+function postExtractionCSE(
+  temps: Map<string, Expression>,
+  expressions: Map<EClassId, Expression>,
+  minSharedCost: number,
+  startingTempCounter: number,
+  costModel: CostModel
+): void {
+  // Count occurrences of each subexpression
+  const exprCounts = new Map<string, { count: number; expr: Expression; cost: number }>();
+
+  function countSubexprs(expr: Expression): void {
+    // Don't count simple expressions
+    if (expr.kind === 'number' || expr.kind === 'variable') return;
+
+    const serialized = serializeExpr(expr);
+    const cost = expressionCost(expr, costModel);
+
+    const existing = exprCounts.get(serialized);
+    if (existing) {
+      existing.count++;
+    } else {
+      exprCounts.set(serialized, { count: 1, expr, cost });
+    }
+
+    // Recurse into children
+    if (expr.kind === 'binary') {
+      countSubexprs(expr.left);
+      countSubexprs(expr.right);
+    } else if (expr.kind === 'unary') {
+      countSubexprs(expr.operand);
+    } else if (expr.kind === 'call') {
+      expr.args.forEach(countSubexprs);
+    } else if (expr.kind === 'component') {
+      countSubexprs(expr.object);
+    }
+  }
+
+  // Count in all temps and root expressions
+  for (const expr of temps.values()) {
+    countSubexprs(expr);
+  }
+  for (const expr of expressions.values()) {
+    countSubexprs(expr);
+  }
+
+  // Find subexpressions worth extracting (count >= 2 and cost > threshold)
+  const toExtract: { serialized: string; expr: Expression; cost: number }[] = [];
+  for (const [serialized, { count, expr, cost }] of exprCounts) {
+    if (count >= 2 && cost > minSharedCost) {
+      // Skip if it's just a temp reference
+      if (expr.kind === 'variable' && expr.name.startsWith('_tmp')) continue;
+      toExtract.push({ serialized, expr, cost });
+    }
+  }
+
+  if (toExtract.length === 0) return;
+
+  // Sort by cost ASCENDING (extract smaller/cheaper expressions first!)
+  // This is critical because larger patterns contain smaller ones.
+  // If we extract (a+b) first as _tmp100, then later patterns
+  // like (2 * (a+b)) will be serialized as (2 * _tmp100) and won't match.
+  toExtract.sort((a, b) => a.cost - b.cost);
+
+  // Build a map of existing temp RHS to prevent duplicates
+  const existingTempRHS = new Map<string, string>();
+  for (const [tempName, expr] of temps) {
+    existingTempRHS.set(serializeExpr(expr), tempName);
+  }
+
+  // Create temps for repeated expressions
+  let tempCounter = startingTempCounter;
+  const serToTemp = new Map<string, string>();
+
+  for (const { serialized, expr } of toExtract) {
+    // Skip if already defined as a temp
+    const existingTemp = existingTempRHS.get(serialized);
+    if (existingTemp) {
+      serToTemp.set(serialized, existingTemp);
+      continue;
+    }
+
+    // Find unique temp name
+    while (temps.has(`_tmp${tempCounter}`)) {
+      tempCounter++;
+    }
+    const tempName = `_tmp${tempCounter++}`;
+    serToTemp.set(serialized, tempName);
+    temps.set(tempName, expr);
+    existingTempRHS.set(serialized, tempName);
+  }
+
+  if (serToTemp.size === 0) return;
+
+  // Substitute new temps into all expressions
+  function substitute(expr: Expression): Expression {
+    if (expr.kind === 'number' || expr.kind === 'variable') return expr;
+
+    const serialized = serializeExpr(expr);
+    const tempName = serToTemp.get(serialized);
+    if (tempName) {
+      return { kind: 'variable', name: tempName };
+    }
+
+    // Recurse
+    if (expr.kind === 'binary') {
+      const left = substitute(expr.left);
+      const right = substitute(expr.right);
+      return (left === expr.left && right === expr.right)
+        ? expr
+        : { kind: 'binary', operator: expr.operator, left, right };
+    } else if (expr.kind === 'unary') {
+      const operand = substitute(expr.operand);
+      return (operand === expr.operand)
+        ? expr
+        : { kind: 'unary', operator: expr.operator, operand };
+    } else if (expr.kind === 'call') {
+      const args = expr.args.map(substitute);
+      return args.every((arg, i) => arg === expr.args[i])
+        ? expr
+        : { kind: 'call', name: expr.name, args };
+    } else if (expr.kind === 'component') {
+      const object = substitute(expr.object);
+      return (object === expr.object)
+        ? expr
+        : { kind: 'component', object, component: expr.component };
+    }
+    return expr;
+  }
+
+  // Substitute in ALL temps, including newly created ones
+  // But skip substituting a temp with itself (self-reference)
+  for (const [tempName, expr] of temps) {
+    // Create a substitute function that won't replace with the current temp
+    const subWithoutSelf = (e: Expression): Expression => {
+      if (e.kind === 'number' || e.kind === 'variable') return e;
+
+      const serialized = serializeExpr(e);
+      const targetTemp = serToTemp.get(serialized);
+      // Don't substitute if it would create self-reference
+      if (targetTemp && targetTemp !== tempName) {
+        return { kind: 'variable', name: targetTemp };
+      }
+
+      if (e.kind === 'binary') {
+        const left = subWithoutSelf(e.left);
+        const right = subWithoutSelf(e.right);
+        return (left === e.left && right === e.right)
+          ? e
+          : { kind: 'binary', operator: e.operator, left, right };
+      } else if (e.kind === 'unary') {
+        const operand = subWithoutSelf(e.operand);
+        return (operand === e.operand)
+          ? e
+          : { kind: 'unary', operator: e.operator, operand };
+      } else if (e.kind === 'call') {
+        const args = e.args.map(subWithoutSelf);
+        return args.every((arg, i) => arg === e.args[i])
+          ? e
+          : { kind: 'call', name: e.name, args };
+      } else if (e.kind === 'component') {
+        const object = subWithoutSelf(e.object);
+        return (object === e.object)
+          ? e
+          : { kind: 'component', object, component: e.component };
+      }
+      return e;
+    };
+
+    temps.set(tempName, subWithoutSelf(expr));
+  }
+
+  // Substitute in root expressions
+  for (const [rootId, expr] of expressions) {
+    expressions.set(rootId, substitute(expr));
+  }
+
+  // Re-sort temps topologically
+  const sorted = topologicalSortTemps(temps);
+  temps.clear();
+  for (const [name, expr] of sorted) {
+    temps.set(name, expr);
+  }
+
+  // Inline temps that are now used only once (after all substitutions)
+  // This is critical because postExtractionCSE may have created temps
+  // that turned out to be used only once after substitution
+  const usageCounts = new Map<string, number>();
+  function countUsage(expr: Expression): void {
+    if (expr.kind === 'variable' && expr.name.startsWith('_tmp')) {
+      usageCounts.set(expr.name, (usageCounts.get(expr.name) ?? 0) + 1);
+    } else if (expr.kind === 'binary') {
+      countUsage(expr.left);
+      countUsage(expr.right);
+    } else if (expr.kind === 'unary') {
+      countUsage(expr.operand);
+    } else if (expr.kind === 'call') {
+      expr.args.forEach(countUsage);
+    } else if (expr.kind === 'component') {
+      countUsage(expr.object);
+    }
+  }
+
+  for (const expr of temps.values()) countUsage(expr);
+  for (const expr of expressions.values()) countUsage(expr);
+
+  // Find temps to inline (used 0 or 1 times)
+  const toInline = new Set<string>();
+  for (const [name] of temps) {
+    const count = usageCounts.get(name) ?? 0;
+    if (count <= 1) toInline.add(name);
+  }
+
+  if (toInline.size > 0) {
+    function inlineTemps(expr: Expression): Expression {
+      if (expr.kind === 'variable' && toInline.has(expr.name)) {
+        const tempExpr = temps.get(expr.name);
+        return tempExpr ? inlineTemps(tempExpr) : expr;
+      } else if (expr.kind === 'binary') {
+        const left = inlineTemps(expr.left);
+        const right = inlineTemps(expr.right);
+        return (left === expr.left && right === expr.right) ? expr
+          : { kind: 'binary', operator: expr.operator, left, right };
+      } else if (expr.kind === 'unary') {
+        const operand = inlineTemps(expr.operand);
+        return (operand === expr.operand) ? expr
+          : { kind: 'unary', operator: expr.operator, operand };
+      } else if (expr.kind === 'call') {
+        const args = expr.args.map(inlineTemps);
+        return args.every((a, i) => a === expr.args[i]) ? expr
+          : { kind: 'call', name: expr.name, args };
+      } else if (expr.kind === 'component') {
+        const object = inlineTemps(expr.object);
+        return (object === expr.object) ? expr
+          : { kind: 'component', object, component: expr.component };
+      }
+      return expr;
+    }
+
+    // Inline in remaining temps
+    for (const [name, expr] of temps) {
+      if (!toInline.has(name)) {
+        temps.set(name, inlineTemps(expr));
+      }
+    }
+
+    // Inline in root expressions
+    for (const [rootId, expr] of expressions) {
+      expressions.set(rootId, inlineTemps(expr));
+    }
+
+    // Remove inlined temps
+    for (const name of toInline) temps.delete(name);
+
+    // Re-sort topologically after inlining (inlining may have changed dependencies)
+    const finalSorted = topologicalSortTemps(temps);
+    temps.clear();
+    for (const [name, expr] of finalSorted) {
+      temps.set(name, expr);
+    }
+  }
 }

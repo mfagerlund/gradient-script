@@ -19,6 +19,7 @@ export type ENode =
   | { tag: 'div'; children: [EClassId, EClassId] }
   | { tag: 'pow'; children: [EClassId, EClassId] }
   | { tag: 'neg'; child: EClassId }
+  | { tag: 'inv'; child: EClassId }  // Reciprocal: inv(x) = 1/x
   | { tag: 'call'; name: string; children: EClassId[] }
   | { tag: 'component'; object: EClassId; field: string };
 
@@ -44,6 +45,8 @@ export function enodeKey(node: ENode): string {
       return `pow:${node.children[0]},${node.children[1]}`;
     case 'neg':
       return `neg:${node.child}`;
+    case 'inv':
+      return `inv:${node.child}`;
     case 'call':
       return `call:${node.name}(${node.children.join(',')})`;
     case 'component':
@@ -66,6 +69,8 @@ export function enodeChildren(node: ENode): EClassId[] {
     case 'pow':
       return [...node.children];
     case 'neg':
+      return [node.child];
+    case 'inv':
       return [node.child];
     case 'call':
       return [...node.children];
@@ -94,6 +99,8 @@ export function enodeWithChildren(node: ENode, newChildren: EClassId[]): ENode {
       return { tag: 'pow', children: [newChildren[0], newChildren[1]] };
     case 'neg':
       return { tag: 'neg', child: newChildren[0] };
+    case 'inv':
+      return { tag: 'inv', child: newChildren[0] };
     case 'call':
       return { tag: 'call', name: node.name, children: newChildren };
     case 'component':

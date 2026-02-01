@@ -32,7 +32,7 @@ export interface CodeGenOptions {
   includeComments?: boolean;
   simplify?: boolean;
   cse?: boolean;
-  useEGraph?: boolean;  // Use e-graph optimization instead of CSE (experimental)
+  useEGraph?: boolean;  // Use e-graph optimization (default: true)
   epsilon?: number;  // Add epsilon guards for zero denominators
   emitGuards?: boolean;  // Emit runtime guards for edge cases
   csharpFloatType?: 'float' | 'double';  // C# float precision
@@ -474,6 +474,7 @@ export function generateGradientFunction(
 
   // Apply CSE if requested - use GLOBAL CSE across all gradients
   const shouldApplyCSE = options.cse !== false; // Default to true
+  const useEGraphOpt = options.useEGraph !== false; // E-graph is default
   let cseIntermediates = new Map<string, Expression>();
 
   if (shouldApplyCSE) {
@@ -486,8 +487,8 @@ export function generateGradientFunction(
     }
 
     // Run CSE globally across ALL gradient expressions
-    // Use e-graph optimization if enabled, otherwise use traditional CSE
-    const globalCSE = options.useEGraph
+    // Use e-graph optimization by default (set useEGraph: false to use traditional CSE)
+    const globalCSE = useEGraphOpt
       ? optimizeWithEGraph(allGradientComponents, { verbose: false })
       : eliminateCommonSubexpressionsGlobal(allGradientComponents);
     cseIntermediates = globalCSE.intermediates;
@@ -515,46 +516,50 @@ export function generateGradientFunction(
   }
 
   // Detect repeated divisions and precalculate inverses
-  // Count in BOTH CSE intermediates AND gradient expressions
+  // Skip when using e-graph since it handles inverses via the 'inv' node type
   const divisionDenominators = new Map<string, number>(); // denominator serialization -> count
   const denominatorExprs = new Map<string, Expression>(); // denominator serialization -> expression
-
-  // Count in CSE intermediates
-  for (const expr of cseIntermediates.values()) {
-    countDivisionDenominators(expr, divisionDenominators, denominatorExprs);
-  }
-
-  // Count in gradient expressions
-  for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
-    if (isStructuredGradient(gradient)) {
-      for (const expr of gradient.components.values()) {
-        countDivisionDenominators(expr, divisionDenominators, denominatorExprs);
-      }
-    }
-  }
-
-  // Create inverse variables for denominators used 2+ times
   const inverseVarMap = new Map<string, string>(); // serialized denominator -> inverse var name
-  let invCounter = 0;
-  for (const [denomKey, count] of divisionDenominators.entries()) {
-    if (count >= 2) {
-      const invVarName = `_inv${invCounter++}`;
-      inverseVarMap.set(denomKey, invVarName);
-    }
-  }
 
-  // Substitute divisions with multiplications by inverse in BOTH CSE temps and gradients
-  if (inverseVarMap.size > 0) {
-    // Substitute in CSE intermediates
-    for (const [varName, expr] of cseIntermediates.entries()) {
-      cseIntermediates.set(varName, substituteDivisionsWithInverse(expr, inverseVarMap));
+  if (!useEGraphOpt) {
+    // Legacy inverse optimization (when NOT using e-graph)
+
+    // Count in CSE intermediates
+    for (const expr of cseIntermediates.values()) {
+      countDivisionDenominators(expr, divisionDenominators, denominatorExprs);
     }
 
-    // Substitute in gradients
+    // Count in gradient expressions
     for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
       if (isStructuredGradient(gradient)) {
-        for (const [comp, expr] of gradient.components.entries()) {
-          gradient.components.set(comp, substituteDivisionsWithInverse(expr, inverseVarMap));
+        for (const expr of gradient.components.values()) {
+          countDivisionDenominators(expr, divisionDenominators, denominatorExprs);
+        }
+      }
+    }
+
+    // Create inverse variables for denominators used 2+ times
+    let invCounter = 0;
+    for (const [denomKey, count] of divisionDenominators.entries()) {
+      if (count >= 2) {
+        const invVarName = `_inv${invCounter++}`;
+        inverseVarMap.set(denomKey, invVarName);
+      }
+    }
+
+    // Substitute divisions with multiplications by inverse in BOTH CSE temps and gradients
+    if (inverseVarMap.size > 0) {
+      // Substitute in CSE intermediates
+      for (const [varName, expr] of cseIntermediates.entries()) {
+        cseIntermediates.set(varName, substituteDivisionsWithInverse(expr, inverseVarMap));
+      }
+
+      // Substitute in gradients
+      for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
+        if (isStructuredGradient(gradient)) {
+          for (const [comp, expr] of gradient.components.entries()) {
+            gradient.components.set(comp, substituteDivisionsWithInverse(expr, inverseVarMap));
+          }
         }
       }
     }

@@ -23,17 +23,36 @@ type NumValue = number | { [key: string]: number };
 export interface GradCheckResult {
   passed: boolean;
   errors: GradCheckError[];
+  singularities: GradCheckSingularity[];
   maxError: number;
   meanError: number;
   totalChecks: number;
 }
 
 /**
+ * Singularity detected during gradient checking
+ * When both analytical and numerical produce NaN/Inf, it's a singularity, not a bug
+ */
+export interface GradCheckSingularity {
+  parameter: string;
+  component?: string;
+  analytical: number;
+  numerical: number;
+}
+
+/**
  * Format gradient check results as a human-readable string
  */
 export function formatGradCheckResult(result: GradCheckResult, funcName: string): string {
+  const singularityCount = result.singularities.length;
+  const verifiedCount = result.totalChecks - result.errors.length - singularityCount;
+
   if (result.passed) {
-    return `✓ ${funcName}: ${result.totalChecks} gradients verified (max error: ${result.maxError.toExponential(2)})`;
+    let msg = `✓ ${funcName}: ${verifiedCount} gradients verified (max error: ${result.maxError.toExponential(2)})`;
+    if (singularityCount > 0) {
+      msg += `\n  ⚠ ${singularityCount} singularities detected (both analytical and numerical produce NaN/Inf)`;
+    }
+    return msg;
   }
 
   const lines: string[] = [
@@ -58,6 +77,10 @@ export function formatGradCheckResult(result: GradCheckResult, funcName: string)
       const components = errs.map(e => `${e.component}:${e.error.toExponential(1)}`).join(', ');
       lines.push(`  ${param}: {${components}}`);
     }
+  }
+
+  if (singularityCount > 0) {
+    lines.push(`  ⚠ ${singularityCount} singularities also detected`);
   }
 
   return lines.join('\n');
@@ -94,7 +117,9 @@ export class GradientChecker {
     testPoint: Map<string, NumValue>
   ): GradCheckResult {
     const errors: GradCheckError[] = [];
+    const singularities: GradCheckSingularity[] = [];
     let totalChecks = 0;
+    let maxError = 0;
 
     // For each parameter that has gradients
     for (const [paramName, gradient] of gradients.gradients.entries()) {
@@ -115,17 +140,13 @@ export class GradientChecker {
         const analytical = this.evaluateExpression(gradient as Expression, testPoint);
         const numerical = this.numericalGradientScalar(func, testPoint, paramName);
 
-        const error = Math.abs(analytical - numerical);
-        const relativeError = Math.abs(error / (numerical + 1e-10));
-
-        if (error > this.tolerance || relativeError > this.tolerance) {
-          errors.push({
-            parameter: paramName,
-            analytical,
-            numerical,
-            error,
-            relativeError
-          });
+        const checkResult = this.compareGradients(analytical, numerical, paramName);
+        if (checkResult.type === 'singularity') {
+          singularities.push(checkResult.singularity!);
+        } else if (checkResult.type === 'error') {
+          errors.push(checkResult.error!);
+        } else if (checkResult.error) {
+          maxError = Math.max(maxError, checkResult.error.error);
         }
       } else {
         // Structured parameter
@@ -140,24 +161,18 @@ export class GradientChecker {
           const analytical = this.evaluateExpression(expr, testPoint);
           const numerical = this.numericalGradientComponent(func, testPoint, paramName, comp);
 
-          const error = Math.abs(analytical - numerical);
-          const relativeError = Math.abs(error / (numerical + 1e-10));
-
-          if (error > this.tolerance || relativeError > this.tolerance) {
-            errors.push({
-              parameter: paramName,
-              component: comp,
-              analytical,
-              numerical,
-              error,
-              relativeError
-            });
+          const checkResult = this.compareGradients(analytical, numerical, paramName, comp);
+          if (checkResult.type === 'singularity') {
+            singularities.push(checkResult.singularity!);
+          } else if (checkResult.type === 'error') {
+            errors.push(checkResult.error!);
+          } else if (checkResult.error) {
+            maxError = Math.max(maxError, checkResult.error.error);
           }
         }
       }
     }
 
-    const maxError = errors.length > 0 ? Math.max(...errors.map(e => e.error)) : 0;
     const meanError = errors.length > 0
       ? errors.reduce((sum, e) => sum + e.error, 0) / errors.length
       : 0;
@@ -165,9 +180,67 @@ export class GradientChecker {
     return {
       passed: errors.length === 0,
       errors,
+      singularities,
       maxError,
       meanError,
       totalChecks
+    };
+  }
+
+  /**
+   * Compare analytical and numerical gradients
+   * Distinguishes between: pass, error (mismatch), and singularity (both NaN/Inf)
+   */
+  private compareGradients(
+    analytical: number,
+    numerical: number,
+    parameter: string,
+    component?: string
+  ): {
+    type: 'pass' | 'error' | 'singularity';
+    error?: GradCheckError;
+    singularity?: GradCheckSingularity;
+  } {
+    const analyticalBad = !isFinite(analytical);
+    const numericalBad = !isFinite(numerical);
+
+    // Both produce NaN/Inf: singularity (not a bug)
+    if (analyticalBad && numericalBad) {
+      return {
+        type: 'singularity',
+        singularity: { parameter, component, analytical, numerical }
+      };
+    }
+
+    // One produces NaN/Inf, the other doesn't: actual bug
+    if (analyticalBad || numericalBad) {
+      return {
+        type: 'error',
+        error: {
+          parameter,
+          component,
+          analytical,
+          numerical,
+          error: Infinity,
+          relativeError: Infinity
+        }
+      };
+    }
+
+    // Both finite: compare values
+    const error = Math.abs(analytical - numerical);
+    const relativeError = Math.abs(error / (Math.abs(numerical) + 1e-10));
+
+    if (error > this.tolerance && relativeError > this.tolerance) {
+      return {
+        type: 'error',
+        error: { parameter, component, analytical, numerical, error, relativeError }
+      };
+    }
+
+    return {
+      type: 'pass',
+      error: { parameter, component, analytical, numerical, error, relativeError }
     };
   }
 

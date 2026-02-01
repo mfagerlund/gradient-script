@@ -13,7 +13,7 @@ import {
   NumberLiteral
 } from './AST.js';
 import { ExpressionTransformer } from './ExpressionTransformer.js';
-import { serializeExpression } from './ExpressionUtils.js';
+import { serializeExpression, serializeCanonical } from './ExpressionUtils.js';
 
 export interface CSEResult {
   intermediates: Map<string, Expression>;
@@ -119,16 +119,46 @@ export function eliminateCommonSubexpressionsGlobal(
   let varCounter = 0;
   const subexprMap = new Map<string, string>();
 
-  // Find common subexpressions
+  // Collect candidates with depths for ordering
+  const candidates: Array<{ exprStr: string; expr: Expression; depth: number }> = [];
   for (const [exprStr, count] of counter.counts.entries()) {
     if (count >= minCount) {
       const parsed = counter.expressions.get(exprStr);
       if (parsed && shouldExtract(parsed)) {
-        const varName = `_tmp${varCounter++}`;
-        intermediates.set(varName, parsed);
-        subexprMap.set(exprStr, varName);
+        candidates.push({ exprStr, expr: parsed, depth: expressionDepth(parsed) });
       }
     }
+  }
+
+  // Sort by depth (shallowest first)
+  candidates.sort((a, b) => a.depth - b.depth);
+
+  // Create temps
+  for (const { exprStr, expr } of candidates) {
+    const varName = `_tmp${varCounter++}`;
+    intermediates.set(varName, expr);
+    subexprMap.set(exprStr, varName);
+  }
+
+  // Post-process: substitute simpler temps into complex temp definitions
+  // Use STRUCTURAL matching (serializeExpression) to avoid canonical confusion
+  const processedIntermediates = new Map<string, Expression>();
+  const tempToStructuralKey = new Map<string, string>(); // Maps temp name to structural key of its original expr
+
+  for (const { exprStr, expr } of candidates) {
+    const varName = subexprMap.get(exprStr)!;
+    tempToStructuralKey.set(varName, serializeExpression(expr));
+
+    let simplifiedExpr = expr;
+    // Substitute each previously processed temp into this expression
+    for (const [processedVarName] of processedIntermediates) {
+      const structKey = tempToStructuralKey.get(processedVarName);
+      if (structKey) {
+        simplifiedExpr = substituteByStructuralKey(simplifiedExpr, structKey, processedVarName);
+      }
+    }
+
+    processedIntermediates.set(varName, simplifiedExpr);
   }
 
   // Apply substitutions to all gradients
@@ -141,7 +171,73 @@ export function eliminateCommonSubexpressionsGlobal(
     simplifiedGradients.set(paramName, simplifiedComponents);
   }
 
-  return { intermediates, gradients: simplifiedGradients };
+  return { intermediates: processedIntermediates, gradients: simplifiedGradients };
+}
+
+/**
+ * Substitute subexpressions by structural key match
+ */
+function substituteByStructuralKey(expr: Expression, structKey: string, replacement: string): Expression {
+  if (serializeExpression(expr) === structKey) {
+    return { kind: 'variable', name: replacement };
+  }
+
+  switch (expr.kind) {
+    case 'number':
+    case 'variable':
+      return expr;
+
+    case 'binary':
+      return {
+        kind: 'binary',
+        operator: expr.operator,
+        left: substituteByStructuralKey(expr.left, structKey, replacement),
+        right: substituteByStructuralKey(expr.right, structKey, replacement)
+      };
+
+    case 'unary':
+      return {
+        kind: 'unary',
+        operator: expr.operator,
+        operand: substituteByStructuralKey(expr.operand, structKey, replacement)
+      };
+
+    case 'call':
+      return {
+        kind: 'call',
+        name: expr.name,
+        args: expr.args.map(arg => substituteByStructuralKey(arg, structKey, replacement))
+      };
+
+    case 'component':
+      return {
+        kind: 'component',
+        object: substituteByStructuralKey(expr.object, structKey, replacement),
+        component: expr.component
+      };
+  }
+}
+
+/**
+ * Calculate expression depth
+ */
+function expressionDepth(expr: Expression): number {
+  switch (expr.kind) {
+    case 'number':
+    case 'variable':
+      return 1;
+    case 'component':
+      return 1 + expressionDepth(expr.object);
+    case 'unary':
+      return 1 + expressionDepth(expr.operand);
+    case 'binary':
+      return 1 + Math.max(expressionDepth(expr.left), expressionDepth(expr.right));
+    case 'call':
+      if (expr.args.length === 0) return 1;
+      return 1 + Math.max(...expr.args.map(expressionDepth));
+    default:
+      return 1;
+  }
 }
 
 /**
@@ -183,7 +279,8 @@ class ExpressionCounter extends ExpressionTransformer {
   }
 
   serialize(expr: Expression): string {
-    return serializeExpression(expr);
+    // Use canonical form so a*b and b*a are treated as the same
+    return serializeCanonical(expr);
   }
 
   private recordExpression(expr: Expression): void {
@@ -229,6 +326,8 @@ class ExpressionCounter extends ExpressionTransformer {
 
 /**
  * Substitute common subexpressions with variables
+ * IMPORTANT: Must substitute larger (deeper) expressions first to avoid
+ * breaking structure before smaller subexpressions can be matched
  */
 function substituteExpressions(
   expr: Expression,
@@ -244,8 +343,19 @@ function substituteExpressions(
     };
   }
 
-  let result = expr;
+  // Sort substitutions by depth (deepest first) to substitute larger expressions
+  // before their subexpressions
+  const sortedSubs: Array<{ exprStr: string; varName: string; depth: number }> = [];
   for (const [exprStr, varName] of subexprMap.entries()) {
+    const exprToReplace = counter.expressions.get(exprStr);
+    if (exprToReplace) {
+      sortedSubs.push({ exprStr, varName, depth: expressionDepth(exprToReplace) });
+    }
+  }
+  sortedSubs.sort((a, b) => b.depth - a.depth); // Deepest first
+
+  let result = expr;
+  for (const { exprStr, varName } of sortedSubs) {
     const exprToReplace = counter.expressions.get(exprStr);
     if (exprToReplace && counter.serialize(result) !== exprStr) {
       result = substituteInExpression(result, exprToReplace, { kind: 'variable', name: varName }, counter);

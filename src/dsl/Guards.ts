@@ -191,24 +191,25 @@ function isSqExpression(expr: Expression): boolean {
 /**
  * Format guard analysis for display
  */
-export function formatGuardWarnings(result: GuardAnalysisResult): string {
+export function formatGuardWarnings(result: GuardAnalysisResult, asComments: boolean = false): string {
   if (!result.hasIssues) {
     return '';
   }
 
+  const prefix = asComments ? '// ' : '';
   const lines: string[] = [];
-  lines.push('⚠️  EDGE CASE WARNINGS:');
-  lines.push('');
-  lines.push('The generated code may encounter edge cases that produce');
-  lines.push('NaN, Infinity, or incorrect gradients:');
-  lines.push('');
+  lines.push(`${prefix}⚠️  EDGE CASE WARNINGS:`);
+  lines.push(prefix);
+  lines.push(`${prefix}The generated code may encounter edge cases that produce`);
+  lines.push(`${prefix}NaN, Infinity, or incorrect gradients:`);
+  lines.push(prefix);
 
   // Show each guard individually with context
   for (const guard of result.guards) {
     const typeLabel = formatGuardType(guard.type);
 
     // Show location and variable if available
-    let location = '  •';
+    let location = `${prefix}  •`;
     if (guard.line) {
       location += ` Line ${guard.line}:`;
     }
@@ -217,14 +218,14 @@ export function formatGuardWarnings(result: GuardAnalysisResult): string {
     }
 
     lines.push(location);
-    lines.push(`    ${typeLabel}: ${guard.description}`);
-    lines.push(`    💡 Fix: ${guard.suggestion}`);
-    lines.push('');
+    lines.push(`${prefix}    ${typeLabel}: ${guard.description}`);
+    lines.push(`${prefix}    💡 Fix: ${guard.suggestion}`);
+    lines.push(prefix);
   }
 
-  lines.push('Add runtime checks or ensure inputs are within valid ranges.');
-  lines.push('Use --guards --epsilon 1e-10 to automatically emit epsilon guards.');
-  lines.push('');
+  lines.push(`${prefix}Add runtime checks or ensure inputs are within valid ranges.`);
+  lines.push(`${prefix}Use --guards --epsilon 1e-10 to automatically emit epsilon guards.`);
+  lines.push(prefix);
 
   return lines.join('\n');
 }

@@ -63,17 +63,23 @@ function verifyGradients(func: FunctionDef, gradients: ReturnType<typeof compute
 
     if (!result.passed) {
       if (allPassed) {
-        // First failure - print header
-        console.error(`\nGradient verification FAILED for "${func.name}":`);
+        // First failure - print header (as comment for valid output)
+        console.error(`// Gradient verification FAILED for "${func.name}":`);
       }
-      console.error(`  Test point ${i + 1}: ${formatGradCheckResult(result, func.name)}`);
+      // Prefix each line with // so output remains valid code
+      const formattedResult = formatGradCheckResult(result, func.name)
+        .split('\n')
+        .map(line => '// ' + line)
+        .join('\n');
+      console.error(`//   Test point ${i + 1}: ${formattedResult}`);
       allPassed = false;
     }
   }
 
   if (allPassed) {
     const result = checker.check(func, gradients, env, testPoints[0]);
-    console.error(formatGradCheckResult(result, func.name));
+    // Prefix with // so output is valid code
+    console.error('// ' + formatGradCheckResult(result, func.name));
   }
 
   return allPassed;
@@ -141,6 +147,8 @@ function main() {
     simplify: true,
     cse: true
   };
+
+  let skipVerify = false;
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -227,8 +235,9 @@ function main() {
 
       const guardAnalysis = analyzeGuards(func);
       if (guardAnalysis.hasIssues) {
-        console.error('Function "' + func.name + '" may have edge cases:');
-        console.error(formatGuardWarnings(guardAnalysis));
+        // Format warnings as comments so output remains valid code even if stderr is captured
+        console.error('// Function "' + func.name + '" may have edge cases:');
+        console.error(formatGuardWarnings(guardAnalysis, true));
       }
 
       const perFunctionOptions: CodeGenOptions = { ...options };
@@ -241,7 +250,7 @@ function main() {
     });
 
     if (hasVerificationFailure) {
-      console.error('\nERROR: Gradient verification failed. Output may contain incorrect gradients!');
+      console.error('// ERROR: Gradient verification failed. Output may contain incorrect gradients!');
       process.exit(1);
     }
 

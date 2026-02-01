@@ -97,6 +97,45 @@ class Simplifier extends ExpressionTransformer {
         return { kind: 'unary', operator: '-', operand: left };
       }
 
+      // (-a) * (-b) → a * b
+      if (left.kind === 'unary' && left.operator === '-' &&
+          right.kind === 'unary' && right.operator === '-') {
+        return this.transform({
+          kind: 'binary',
+          operator: '*',
+          left: left.operand,
+          right: right.operand
+        });
+      }
+
+      // (-a) * b → -(a * b)
+      if (left.kind === 'unary' && left.operator === '-') {
+        return {
+          kind: 'unary',
+          operator: '-',
+          operand: this.transform({
+            kind: 'binary',
+            operator: '*',
+            left: left.operand,
+            right
+          })
+        };
+      }
+
+      // a * (-b) → -(a * b)
+      if (right.kind === 'unary' && right.operator === '-') {
+        return {
+          kind: 'unary',
+          operator: '-',
+          operand: this.transform({
+            kind: 'binary',
+            operator: '*',
+            left,
+            right: right.operand
+          })
+        };
+      }
+
       // (x / x) * y → y
       if (left.kind === 'binary' && left.operator === '/') {
         if (expressionsEqual(left.left, left.right)) {
@@ -146,6 +185,45 @@ class Simplifier extends ExpressionTransformer {
       if (rightNum === 1) return left;
       if (expressionsEqual(left, right)) {
         return { kind: 'number', value: 1 };
+      }
+
+      // (-a) / (-b) → a / b
+      if (left.kind === 'unary' && left.operator === '-' &&
+          right.kind === 'unary' && right.operator === '-') {
+        return this.transform({
+          kind: 'binary',
+          operator: '/',
+          left: left.operand,
+          right: right.operand
+        });
+      }
+
+      // (-a) / b → -(a / b)
+      if (left.kind === 'unary' && left.operator === '-') {
+        return {
+          kind: 'unary',
+          operator: '-',
+          operand: this.transform({
+            kind: 'binary',
+            operator: '/',
+            left: left.operand,
+            right
+          })
+        };
+      }
+
+      // a / (-b) → -(a / b)
+      if (right.kind === 'unary' && right.operator === '-') {
+        return {
+          kind: 'unary',
+          operator: '-',
+          operand: this.transform({
+            kind: 'binary',
+            operator: '/',
+            left,
+            right: right.operand
+          })
+        };
       }
 
       // (a + a) / 2 → a

@@ -225,8 +225,8 @@ export function expressionDepth(expr: Expression): number {
 }
 
 /**
- * Serializes an expression to canonical string representation.
- * Used for expression comparison and hashing (CSE, CodeGen forward reuse).
+ * Serializes an expression to structural string representation.
+ * Used for exact expression comparison - operand order matters.
  *
  * This ensures consistent string representation of expressions across different
  * parts of the codebase.
@@ -251,5 +251,45 @@ export function serializeExpression(expr: Expression): string {
 
     case 'component':
       return `comp(${serializeExpression(expr.object)},${expr.component})`;
+  }
+}
+
+/**
+ * Serializes an expression to canonical form for CSE matching.
+ * Commutative operations (+ and *) have operands sorted lexicographically,
+ * so a*b and b*a produce the same canonical string.
+ */
+export function serializeCanonical(expr: Expression): string {
+  switch (expr.kind) {
+    case 'number':
+      return `num(${expr.value})`;
+
+    case 'variable':
+      return `var(${expr.name})`;
+
+    case 'binary': {
+      const leftStr = serializeCanonical(expr.left);
+      const rightStr = serializeCanonical(expr.right);
+
+      // For commutative operations, sort operands lexicographically
+      if (expr.operator === '+' || expr.operator === '*') {
+        const [first, second] = leftStr <= rightStr ? [leftStr, rightStr] : [rightStr, leftStr];
+        return `bin(${expr.operator},${first},${second})`;
+      }
+
+      // Non-commutative: preserve order
+      return `bin(${expr.operator},${leftStr},${rightStr})`;
+    }
+
+    case 'unary':
+      return `un(${expr.operator},${serializeCanonical(expr.operand)})`;
+
+    case 'call': {
+      const args = expr.args.map(arg => serializeCanonical(arg)).join(',');
+      return `call(${expr.name},${args})`;
+    }
+
+    case 'component':
+      return `comp(${serializeCanonical(expr.object)},${expr.component})`;
   }
 }

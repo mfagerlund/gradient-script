@@ -327,4 +327,179 @@ describe('Real-World Examples - Robotics & Vision', () => {
     expect(result.dp.x).toBeCloseTo(-p.y / mag_sq, 10);
     expect(result.dp.y).toBeCloseTo(p.x / mag_sq, 10);
   });
+
+  it('should compute gradients for full reprojection V residual with distortion', { timeout: 30000 }, () => {
+    // Full camera reprojection with quaternion rotation and lens distortion
+    // From: C:\Dev\Rotera\src\optimization\residuals\gradients\reprojection-v.gs
+    const input = `
+      function reprojection_v(
+        worldPoint∇: {x, y, z},
+        cameraPos∇: {x, y, z},
+        q∇: {w, x, y, z},
+        fx, fy, cx, cy, k1, k2, k3, p1, p2,
+        observedV
+      ) {
+        tx = worldPoint.x - cameraPos.x
+        ty = worldPoint.y - cameraPos.y
+        tz = worldPoint.z - cameraPos.z
+
+        qcx = q.y * tz - q.z * ty
+        qcy = q.z * tx - q.x * tz
+        qcz = q.x * ty - q.y * tx
+
+        dcx = q.y * qcz - q.z * qcy
+        dcy = q.z * qcx - q.x * qcz
+        dcz = q.x * qcy - q.y * qcx
+
+        camX = tx + 2 * q.w * qcx + 2 * dcx
+        camY = ty + 2 * q.w * qcy + 2 * dcy
+        camZ = tz + 2 * q.w * qcz + 2 * dcz
+
+        normX = camX / camZ
+        normY = camY / camZ
+
+        r2 = normX * normX + normY * normY
+        r4 = r2 * r2
+        r6 = r4 * r2
+        radial = 1 + k1 * r2 + k2 * r4 + k3 * r6
+        tangY = p1 * (r2 + 2 * normY * normY) + 2 * p2 * normX * normY
+
+        distortedY = normY * radial + tangY
+
+        v = cy - fy * distortedY
+
+        return v - observedV
+      }
+    `;
+
+    const { func, env, gradients } = parseAndCompile(input);
+    const code = generateGradientFunction(func, gradients, env, { simplify: true });
+
+    const f_grad = evalGeneratedCode(code, 'reprojection_v_grad');
+
+    // Test with realistic camera parameters
+    // Ensure worldPoint is NOT at cameraPos (would cause division by zero)
+    const worldPoint = { x: 2.5, y: 1.8, z: 15.0 };
+    const cameraPos = { x: 0.0, y: 0.0, z: 0.0 };
+    // Normalized quaternion (identity rotation)
+    const q = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+    // Typical camera intrinsics
+    const fx = 500.0;
+    const fy = 500.0;
+    const cx = 320.0;
+    const cy = 240.0;
+    // Small distortion coefficients
+    const k1 = 0.1;
+    const k2 = -0.05;
+    const k3 = 0.01;
+    const p1 = 0.001;
+    const p2 = -0.001;
+    const observedV = 180.0;
+
+    const result = f_grad(
+      worldPoint, cameraPos, q,
+      fx, fy, cx, cy, k1, k2, k3, p1, p2,
+      observedV
+    );
+
+    // Value should be finite
+    expect(result.value).not.toBeNaN();
+    expect(isFinite(result.value)).toBe(true);
+
+    // All gradients should be finite
+    expect(result.dworldPoint.x).not.toBeNaN();
+    expect(result.dworldPoint.y).not.toBeNaN();
+    expect(result.dworldPoint.z).not.toBeNaN();
+    expect(result.dcameraPos.x).not.toBeNaN();
+    expect(result.dcameraPos.y).not.toBeNaN();
+    expect(result.dcameraPos.z).not.toBeNaN();
+    expect(result.dq.w).not.toBeNaN();
+    expect(result.dq.x).not.toBeNaN();
+    expect(result.dq.y).not.toBeNaN();
+    expect(result.dq.z).not.toBeNaN();
+
+    // Numerical gradient verification helper
+    const evalReprojV = (
+      wp: { x: number; y: number; z: number },
+      cp: { x: number; y: number; z: number },
+      quat: { w: number; x: number; y: number; z: number }
+    ) => {
+      const tx = wp.x - cp.x;
+      const ty = wp.y - cp.y;
+      const tz = wp.z - cp.z;
+
+      const qcx = quat.y * tz - quat.z * ty;
+      const qcy = quat.z * tx - quat.x * tz;
+      const qcz = quat.x * ty - quat.y * tx;
+
+      const dcx = quat.y * qcz - quat.z * qcy;
+      const dcy = quat.z * qcx - quat.x * qcz;
+      const dcz = quat.x * qcy - quat.y * qcx;
+
+      const camX = tx + 2 * quat.w * qcx + 2 * dcx;
+      const camY = ty + 2 * quat.w * qcy + 2 * dcy;
+      const camZ = tz + 2 * quat.w * qcz + 2 * dcz;
+
+      const normX = camX / camZ;
+      const normY = camY / camZ;
+
+      const r2 = normX * normX + normY * normY;
+      const r4 = r2 * r2;
+      const r6 = r4 * r2;
+      const radial = 1 + k1 * r2 + k2 * r4 + k3 * r6;
+      const tangY = p1 * (r2 + 2 * normY * normY) + 2 * p2 * normX * normY;
+
+      const distortedY = normY * radial + tangY;
+      const v = cy - fy * distortedY;
+
+      return v - observedV;
+    };
+
+    const h = 1e-7;
+
+    // Verify worldPoint gradients
+    const numGradWP = {
+      x: (evalReprojV({ x: worldPoint.x + h, y: worldPoint.y, z: worldPoint.z }, cameraPos, q) -
+          evalReprojV({ x: worldPoint.x - h, y: worldPoint.y, z: worldPoint.z }, cameraPos, q)) / (2 * h),
+      y: (evalReprojV({ x: worldPoint.x, y: worldPoint.y + h, z: worldPoint.z }, cameraPos, q) -
+          evalReprojV({ x: worldPoint.x, y: worldPoint.y - h, z: worldPoint.z }, cameraPos, q)) / (2 * h),
+      z: (evalReprojV({ x: worldPoint.x, y: worldPoint.y, z: worldPoint.z + h }, cameraPos, q) -
+          evalReprojV({ x: worldPoint.x, y: worldPoint.y, z: worldPoint.z - h }, cameraPos, q)) / (2 * h),
+    };
+
+    expect(result.dworldPoint.x).toBeCloseTo(numGradWP.x, 4);
+    expect(result.dworldPoint.y).toBeCloseTo(numGradWP.y, 4);
+    expect(result.dworldPoint.z).toBeCloseTo(numGradWP.z, 4);
+
+    // Verify cameraPos gradients
+    const numGradCP = {
+      x: (evalReprojV(worldPoint, { x: cameraPos.x + h, y: cameraPos.y, z: cameraPos.z }, q) -
+          evalReprojV(worldPoint, { x: cameraPos.x - h, y: cameraPos.y, z: cameraPos.z }, q)) / (2 * h),
+      y: (evalReprojV(worldPoint, { x: cameraPos.x, y: cameraPos.y + h, z: cameraPos.z }, q) -
+          evalReprojV(worldPoint, { x: cameraPos.x, y: cameraPos.y - h, z: cameraPos.z }, q)) / (2 * h),
+      z: (evalReprojV(worldPoint, { x: cameraPos.x, y: cameraPos.y, z: cameraPos.z + h }, q) -
+          evalReprojV(worldPoint, { x: cameraPos.x, y: cameraPos.y, z: cameraPos.z - h }, q)) / (2 * h),
+    };
+
+    expect(result.dcameraPos.x).toBeCloseTo(numGradCP.x, 4);
+    expect(result.dcameraPos.y).toBeCloseTo(numGradCP.y, 4);
+    expect(result.dcameraPos.z).toBeCloseTo(numGradCP.z, 4);
+
+    // Verify quaternion gradients
+    const numGradQ = {
+      w: (evalReprojV(worldPoint, cameraPos, { w: q.w + h, x: q.x, y: q.y, z: q.z }) -
+          evalReprojV(worldPoint, cameraPos, { w: q.w - h, x: q.x, y: q.y, z: q.z })) / (2 * h),
+      x: (evalReprojV(worldPoint, cameraPos, { w: q.w, x: q.x + h, y: q.y, z: q.z }) -
+          evalReprojV(worldPoint, cameraPos, { w: q.w, x: q.x - h, y: q.y, z: q.z })) / (2 * h),
+      y: (evalReprojV(worldPoint, cameraPos, { w: q.w, x: q.x, y: q.y + h, z: q.z }) -
+          evalReprojV(worldPoint, cameraPos, { w: q.w, x: q.x, y: q.y - h, z: q.z })) / (2 * h),
+      z: (evalReprojV(worldPoint, cameraPos, { w: q.w, x: q.x, y: q.y, z: q.z + h }) -
+          evalReprojV(worldPoint, cameraPos, { w: q.w, x: q.x, y: q.y, z: q.z - h })) / (2 * h),
+    };
+
+    expect(result.dq.w).toBeCloseTo(numGradQ.w, 4);
+    expect(result.dq.x).toBeCloseTo(numGradQ.x, 4);
+    expect(result.dq.y).toBeCloseTo(numGradQ.y, 4);
+    expect(result.dq.z).toBeCloseTo(numGradQ.z, 4);
+  });
 });

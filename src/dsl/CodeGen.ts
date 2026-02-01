@@ -213,6 +213,10 @@ export class ExpressionCodeGen {
 
   private genUnary(expr: UnaryOp): string {
     const operand = this.generate(expr.operand);
+    // Parenthesize binary operands to avoid precedence bugs: -(a + b) not -a + b
+    if (expr.operand.kind === 'binary') {
+      return `${expr.operator}(${operand})`;
+    }
     return `${expr.operator}${operand}`;
   }
 

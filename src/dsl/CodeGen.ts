@@ -611,7 +611,7 @@ export function generateGradientFunction(
 }
 
 /**
- * Generate the original forward function
+ * Generate the original forward function (with optional e-graph optimization)
  */
 export function generateForwardFunction(
   func: FunctionDef,
@@ -619,6 +619,7 @@ export function generateForwardFunction(
 ): string {
   const format = options.format || 'typescript';
   const csharpFloatType = options.csharpFloatType || 'float';
+  const shouldOptimize = options.cse !== false; // Optimize by default
   const codegen = new ExpressionCodeGen(format, csharpFloatType);
   const lines: string[] = [];
 
@@ -633,29 +634,128 @@ export function generateForwardFunction(
     const floatType = csharpFloatType;
     const params = func.parameters.map(p => {
       if (p.paramType && p.paramType.components) {
-        // Structured parameter - create a struct type name
         return `${capitalize(p.name)}Struct ${p.name}`;
       }
       return `${floatType} ${p.name}`;
     }).join(', ');
 
-    // Generate struct definitions for structured parameters first (we'll prepend them later)
     lines.push(`public static ${floatType} ${capitalize(func.name)}(${params})`);
     lines.push('{');
   }
 
-  // Body
+  // Collect all forward variable names (for dependency tracking)
+  const forwardVars = new Set<string>();
+  for (const stmt of func.body) {
+    if (stmt.kind === 'assignment') {
+      forwardVars.add(stmt.variable);
+    }
+  }
+
+  // Collect expressions for optimization
+  const varExpressions = new Map<string, Expression>();
+  for (const stmt of func.body) {
+    if (stmt.kind === 'assignment') {
+      varExpressions.set(stmt.variable, stmt.expression);
+    }
+  }
+
+  // Optimize with e-graph if enabled
+  let optimizedExprs = varExpressions;
+  let cseTemps = new Map<string, Expression>();
+
+  if (shouldOptimize && varExpressions.size > 0) {
+    const forOptimizer = new Map<string, Map<string, Expression>>();
+    forOptimizer.set('_forward', varExpressions);
+    const result = optimizeWithEGraph(forOptimizer, { verbose: false });
+    cseTemps = result.intermediates;
+    optimizedExprs = result.gradients.get('_forward') || varExpressions;
+  }
+
+  // Helper to find which forward vars an expression depends on
+  function findForwardVarDeps(expr: Expression): Set<string> {
+    const deps = new Set<string>();
+    function visit(e: Expression): void {
+      if (e.kind === 'variable' && forwardVars.has(e.name)) {
+        deps.add(e.name);
+      } else if (e.kind === 'binary') {
+        visit(e.left);
+        visit(e.right);
+      } else if (e.kind === 'unary') {
+        visit(e.operand);
+      } else if (e.kind === 'call') {
+        e.args.forEach(visit);
+      } else if (e.kind === 'component') {
+        visit(e.object);
+      }
+    }
+    visit(expr);
+    return deps;
+  }
+
+  // Track which temps need to be emitted after which forward var
+  const tempAfterVar = new Map<string, Array<{ name: string; expr: Expression }>>();
+  const tempsEmittedBeforeAny: Array<{ name: string; expr: Expression }> = [];
+
+  for (const [tempName, tempExpr] of cseTemps) {
+    const deps = findForwardVarDeps(tempExpr);
+    if (deps.size === 0) {
+      // Temp only depends on params - emit before any forward vars
+      tempsEmittedBeforeAny.push({ name: tempName, expr: tempExpr });
+    } else {
+      // Find the last forward var this temp depends on
+      let lastDep = '';
+      for (const stmt of func.body) {
+        if (stmt.kind === 'assignment' && deps.has(stmt.variable)) {
+          lastDep = stmt.variable;
+        }
+      }
+      if (lastDep) {
+        if (!tempAfterVar.has(lastDep)) {
+          tempAfterVar.set(lastDep, []);
+        }
+        tempAfterVar.get(lastDep)!.push({ name: tempName, expr: tempExpr });
+      }
+    }
+  }
+
+  // Emit temps that don't depend on forward vars
+  for (const { name: tempName, expr } of tempsEmittedBeforeAny) {
+    const code = codegen.generate(expr);
+    if (format === 'typescript' || format === 'javascript') {
+      lines.push(`  const ${tempName} = ${code};`);
+    } else if (format === 'python') {
+      lines.push(`  ${tempName} = ${code}`);
+    } else if (format === 'csharp') {
+      lines.push(`    ${csharpFloatType} ${tempName} = ${code};`);
+    }
+  }
+
+  // Generate variable assignments with interleaved temps
   for (const stmt of func.body) {
     if (stmt.kind === 'assignment') {
       const varName = stmt.variable;
-      const expr = codegen.generate(stmt.expression);
+      const expr = optimizedExprs.get(varName) || stmt.expression;
+      const code = codegen.generate(expr);
 
       if (format === 'typescript' || format === 'javascript') {
-        lines.push(`  const ${varName} = ${expr};`);
+        lines.push(`  const ${varName} = ${code};`);
       } else if (format === 'python') {
-        lines.push(`  ${varName} = ${expr}`);
+        lines.push(`  ${varName} = ${code}`);
       } else if (format === 'csharp') {
-        lines.push(`    ${csharpFloatType} ${varName} = ${expr};`);
+        lines.push(`    ${csharpFloatType} ${varName} = ${code};`);
+      }
+
+      // Emit any temps that depend on this var
+      const tempsForVar = tempAfterVar.get(varName) || [];
+      for (const { name: tempName, expr: tempExpr } of tempsForVar) {
+        const tempCode = codegen.generate(tempExpr);
+        if (format === 'typescript' || format === 'javascript') {
+          lines.push(`  const ${tempName} = ${tempCode};`);
+        } else if (format === 'python') {
+          lines.push(`  ${tempName} = ${tempCode}`);
+        } else if (format === 'csharp') {
+          lines.push(`    ${csharpFloatType} ${tempName} = ${tempCode};`);
+        }
       }
     }
   }

@@ -59,7 +59,7 @@ node dist/cli.js examples/distance.gs --format csharp
 - **Expander.ts/BuiltIns.ts**: Expand vector operations (dot2d, magnitude2d) before differentiation
 - **Inliner.ts**: Inline intermediate variables for differentiation
 - **Simplify.ts**: Algebraic simplification (0+x→x, 1*x→x, etc.)
-- **CSE.ts**: Extract repeated subexpressions into temporary variables
+- **egraph/**: E-graph equality saturation optimizer (CSE + algebraic rewrites)
 - **CodeGen.ts**: Emit TypeScript/JavaScript/Python/C# code
 - **GradientChecker.ts**: Verify gradients against numerical finite differences
 
@@ -85,3 +85,12 @@ function name(param1∇: {x, y}, param2∇, constant_param) {
 - Operators: `+`, `-`, `*`, `/`, `^` (power)
 - Built-ins: `sqrt`, `sin`, `cos`, `tan`, `atan2`, `exp`, `log`, `abs`, `min`, `max`, `clamp`
 - Vector helpers: `dot2d`, `cross2d`, `magnitude2d`, `normalize2d`
+
+## Common Shortcuts
+
+When I say **"regen"**, regenerate the main test example:
+```bash
+node dist/cli.js examples/reprojection-v.gs > generated-reprojection-v.ts
+```
+
+This is the most complex example and serves as the primary benchmark for optimization quality.

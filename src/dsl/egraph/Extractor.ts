@@ -83,7 +83,7 @@ export function extractWithCSE(
   // Count references to each e-class from roots
   const refCounts = countReferences(egraph, roots, costs, costModel);
 
-  // Decide which classes should become temps
+  // Decide which classes should become temps (count >= 2 means used multiple times)
   const tempsToExtract = new Map<EClassId, string>();
   let tempCounter = 0;
 
@@ -96,7 +96,7 @@ export function extractWithCSE(
     }
   }
 
-  // Extract temp definitions (without using other temps, to get base expressions)
+  // Extract temp definitions (base expressions without temp substitution)
   const temps = new Map<string, Expression>();
   for (const [classId, tempName] of tempsToExtract) {
     const expr = extractFromClass(egraph, classId, costs, costModel);
@@ -108,6 +108,82 @@ export function extractWithCSE(
   for (const rootId of roots) {
     const expr = extractWithTemps(egraph, rootId, costs, costModel, tempsToExtract);
     expressions.set(rootId, expr);
+  }
+
+  // Count actual usage of each temp in the final output
+  const tempUsageCounts = new Map<string, number>();
+  function countTempUsage(expr: Expression): void {
+    if (expr.kind === 'variable' && expr.name.startsWith('_tmp')) {
+      tempUsageCounts.set(expr.name, (tempUsageCounts.get(expr.name) ?? 0) + 1);
+    } else if (expr.kind === 'binary') {
+      countTempUsage(expr.left);
+      countTempUsage(expr.right);
+    } else if (expr.kind === 'unary') {
+      countTempUsage(expr.operand);
+    } else if (expr.kind === 'call') {
+      expr.args.forEach(countTempUsage);
+    } else if (expr.kind === 'component') {
+      countTempUsage(expr.object);
+    }
+  }
+
+  for (const expr of expressions.values()) {
+    countTempUsage(expr);
+  }
+
+  // Identify temps to inline (used 0 or 1 times)
+  const tempsToInline = new Set<string>();
+  for (const [tempName] of temps) {
+    const count = tempUsageCounts.get(tempName) ?? 0;
+    if (count <= 1) {
+      tempsToInline.add(tempName);
+    }
+  }
+
+  // If there are temps to inline, substitute them back
+  if (tempsToInline.size > 0) {
+    function inlineTemps(expr: Expression): Expression {
+      if (expr.kind === 'variable' && tempsToInline.has(expr.name)) {
+        const tempExpr = temps.get(expr.name);
+        return tempExpr ? inlineTemps(tempExpr) : expr;
+      } else if (expr.kind === 'binary') {
+        return {
+          kind: 'binary',
+          operator: expr.operator,
+          left: inlineTemps(expr.left),
+          right: inlineTemps(expr.right)
+        };
+      } else if (expr.kind === 'unary') {
+        return {
+          kind: 'unary',
+          operator: expr.operator,
+          operand: inlineTemps(expr.operand)
+        };
+      } else if (expr.kind === 'call') {
+        return {
+          kind: 'call',
+          name: expr.name,
+          args: expr.args.map(inlineTemps)
+        };
+      } else if (expr.kind === 'component') {
+        return {
+          kind: 'component',
+          object: inlineTemps(expr.object),
+          component: expr.component
+        };
+      }
+      return expr;
+    }
+
+    // Inline in root expressions
+    for (const [rootId, expr] of expressions) {
+      expressions.set(rootId, inlineTemps(expr));
+    }
+
+    // Remove inlined temps
+    for (const tempName of tempsToInline) {
+      temps.delete(tempName);
+    }
   }
 
   // Calculate total cost

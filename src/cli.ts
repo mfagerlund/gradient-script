@@ -8,7 +8,7 @@ import { generateComplete } from './dsl/CodeGen.js';
 import type { CodeGenOptions } from './dsl/CodeGen.js';
 import { analyzeGuards, formatGuardWarnings } from './dsl/Guards.js';
 import { ParseError, formatParseError } from './dsl/Errors.js';
-import { GradientChecker, formatGradCheckResult } from './dsl/GradientChecker.js';
+// GradientChecker import removed - verification now executes generated code directly
 import { Types } from './dsl/Types.js';
 import type { FunctionDef, Parameter } from './dsl/AST.js';
 import type { TypeEnv } from './dsl/Types.js';
@@ -49,37 +49,186 @@ function generateTestPoints(func: FunctionDef, env: TypeEnv): Map<string, number
 }
 
 /**
- * Verify gradients for a function using numerical differentiation.
- * Returns true if all gradients pass, false otherwise.
+ * Verify gradients by executing the GENERATED CODE against numerical differentiation.
+ * This catches code generation bugs (like missing parentheses) that AST-based checking misses.
  */
-function verifyGradients(func: FunctionDef, gradients: ReturnType<typeof computeFunctionGradients>, env: TypeEnv): boolean {
-  const checker = new GradientChecker(1e-5, 1e-4);
+function verifyGeneratedCode(
+  func: FunctionDef,
+  generatedCode: string,
+  env: TypeEnv
+): boolean {
   const testPoints = generateTestPoints(func, env);
+  const epsilon = 1e-6;
+  const tolerance = 1e-4;
+
+  // Build parameter list for function calls
+  const paramNames = func.parameters.map(p => p.name);
+
+  // Create executable functions from generated code
+  // The generated code defines both funcName and funcName_grad
+  let forwardFn: (...args: number[]) => number;
+  let gradFn: (...args: (number | Record<string, number>)[]) => Record<string, number | Record<string, number>>;
+
+  try {
+    // Create a function that returns both the forward and grad functions
+    const factory = new Function(`
+      ${generatedCode}
+      return { forward: ${func.name}, grad: ${func.name}_grad };
+    `);
+    const fns = factory();
+    forwardFn = fns.forward;
+    gradFn = fns.grad;
+  } catch (e) {
+    console.error(`// Gradient verification FAILED for "${func.name}": code execution error`);
+    console.error(`// ${e}`);
+    return false;
+  }
 
   let allPassed = true;
+  let maxError = 0;
+  let totalChecks = 0;
+  const errors: string[] = [];
 
-  for (let i = 0; i < testPoints.length; i++) {
-    const result = checker.check(func, gradients, env, testPoints[i]);
+  for (let pointIdx = 0; pointIdx < testPoints.length; pointIdx++) {
+    const testPoint = testPoints[pointIdx];
 
-    if (!result.passed) {
-      if (allPassed) {
-        // First failure - print header (as comment for valid output)
-        console.error(`// Gradient verification FAILED for "${func.name}":`);
+    // Build args array (flattening structured types)
+    const args: number[] = [];
+    for (const param of func.parameters) {
+      const val = testPoint.get(param.name);
+      if (typeof val === 'number') {
+        args.push(val);
+      } else {
+        // Structured: pass components in order
+        const paramType = env.getOrThrow(param.name);
+        if (!Types.isScalar(paramType)) {
+          for (const comp of paramType.components) {
+            args.push((val as Record<string, number>)[comp]);
+          }
+        }
       }
-      // Prefix each line with // so output remains valid code
-      const formattedResult = formatGradCheckResult(result, func.name)
-        .split('\n')
-        .map(line => '// ' + line)
-        .join('\n');
-      console.error(`//   Test point ${i + 1}: ${formattedResult}`);
+    }
+
+    // Run forward function at test point
+    let f0: number;
+    try {
+      f0 = forwardFn(...args);
+    } catch (e) {
+      errors.push(`Test point ${pointIdx + 1}: forward function threw: ${e}`);
       allPassed = false;
+      continue;
+    }
+
+    // Run gradient function
+    let gradResult: Record<string, number | Record<string, number>>;
+    try {
+      // Pass original (non-flattened) args for grad function
+      const gradArgs: (number | Record<string, number>)[] = [];
+      for (const param of func.parameters) {
+        const val = testPoint.get(param.name);
+        if (typeof val === 'number') {
+          gradArgs.push(val);
+        } else {
+          // For structured types, pass as object with named components
+          gradArgs.push(val as Record<string, number>);
+        }
+      }
+      gradResult = gradFn(...gradArgs);
+    } catch (e) {
+      errors.push(`Test point ${pointIdx + 1}: gradient function threw: ${e}`);
+      allPassed = false;
+      continue;
+    }
+
+    // For each gradient parameter, compare analytical vs numerical
+    for (const param of func.parameters) {
+      if (!param.requiresGrad) continue;
+
+      const paramType = env.getOrThrow(param.name);
+      const gradKey = `d${param.name}`;
+
+      if (Types.isScalar(paramType)) {
+        // Scalar gradient
+        totalChecks++;
+        const analytical = gradResult[gradKey] as number;
+
+        // Compute numerical gradient
+        const paramIdx = func.parameters.findIndex(p => p.name === param.name);
+        let flatIdx = 0;
+        for (let i = 0; i < paramIdx; i++) {
+          const pt = env.getOrThrow(func.parameters[i].name);
+          flatIdx += Types.isScalar(pt) ? 1 : pt.components.length;
+        }
+
+        const argsPlus = [...args];
+        const argsMinus = [...args];
+        argsPlus[flatIdx] += epsilon;
+        argsMinus[flatIdx] -= epsilon;
+
+        const fPlus = forwardFn(...argsPlus);
+        const fMinus = forwardFn(...argsMinus);
+        const numerical = (fPlus - fMinus) / (2 * epsilon);
+
+        const error = Math.abs(analytical - numerical);
+        const relError = error / (Math.abs(numerical) + 1e-10);
+        maxError = Math.max(maxError, error);
+
+        if (error > tolerance && relError > tolerance) {
+          if (!isNaN(analytical) || !isNaN(numerical)) {
+            errors.push(`${param.name}: analytical=${analytical.toExponential(2)}, numerical=${numerical.toExponential(2)}, error=${error.toExponential(2)}`);
+            allPassed = false;
+          }
+        }
+      } else {
+        // Structured gradient
+        const gradStruct = gradResult[gradKey] as Record<string, number>;
+        const paramIdx = func.parameters.findIndex(p => p.name === param.name);
+
+        let flatIdx = 0;
+        for (let i = 0; i < paramIdx; i++) {
+          const pt = env.getOrThrow(func.parameters[i].name);
+          flatIdx += Types.isScalar(pt) ? 1 : pt.components.length;
+        }
+
+        for (let compIdx = 0; compIdx < paramType.components.length; compIdx++) {
+          const comp = paramType.components[compIdx];
+          totalChecks++;
+          const analytical = gradStruct[comp];
+
+          const argsPlus = [...args];
+          const argsMinus = [...args];
+          argsPlus[flatIdx + compIdx] += epsilon;
+          argsMinus[flatIdx + compIdx] -= epsilon;
+
+          const fPlus = forwardFn(...argsPlus);
+          const fMinus = forwardFn(...argsMinus);
+          const numerical = (fPlus - fMinus) / (2 * epsilon);
+
+          const error = Math.abs(analytical - numerical);
+          const relError = error / (Math.abs(numerical) + 1e-10);
+          maxError = Math.max(maxError, error);
+
+          if (error > tolerance && relError > tolerance) {
+            if (!isNaN(analytical) || !isNaN(numerical)) {
+              errors.push(`${param.name}.${comp}: analytical=${analytical.toExponential(2)}, numerical=${numerical.toExponential(2)}, error=${error.toExponential(2)}`);
+              allPassed = false;
+            }
+          }
+        }
+      }
     }
   }
 
   if (allPassed) {
-    const result = checker.check(func, gradients, env, testPoints[0]);
-    // Prefix with // so output is valid code
-    console.error('// ' + formatGradCheckResult(result, func.name));
+    console.error(`// ✓ ${func.name}: ${totalChecks} gradients verified (max error: ${maxError.toExponential(2)})`);
+  } else {
+    console.error(`// ✗ ${func.name}: gradient verification FAILED`);
+    for (const err of errors.slice(0, 5)) {
+      console.error(`//   ${err}`);
+    }
+    if (errors.length > 5) {
+      console.error(`//   ... and ${errors.length - 5} more errors`);
+    }
   }
 
   return allPassed;
@@ -230,8 +379,17 @@ function main() {
       const env = inferFunction(func);
       const gradients = computeFunctionGradients(func, env);
 
-      // MANDATORY gradient verification
-      const verified = verifyGradients(func, gradients, env);
+      const perFunctionOptions: CodeGenOptions = { ...options };
+      if (index > 0 && perFunctionOptions.includeComments !== false) {
+        perFunctionOptions.includeComments = false;
+      }
+
+      // Generate code FIRST
+      const code = generateComplete(func, gradients, env, perFunctionOptions);
+
+      // MANDATORY: Verify the GENERATED CODE against numerical differentiation
+      // This catches code generation bugs that AST-based checking would miss
+      const verified = verifyGeneratedCode(func, code, env);
       if (!verified) {
         hasVerificationFailure = true;
       }
@@ -243,12 +401,6 @@ function main() {
         console.error(formatGuardWarnings(guardAnalysis, true));
       }
 
-      const perFunctionOptions: CodeGenOptions = { ...options };
-      if (index > 0 && perFunctionOptions.includeComments !== false) {
-        perFunctionOptions.includeComments = false;
-      }
-
-      const code = generateComplete(func, gradients, env, perFunctionOptions);
       outputs.push(code);
     });
 

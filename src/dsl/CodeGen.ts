@@ -19,6 +19,7 @@ import { GradientResult, StructuredGradient } from './Differentiation.js';
 import { simplifyGradients } from './Simplify.js';
 import { ExpressionTransformer } from './ExpressionTransformer.js';
 import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions, eliminateCommonSubexpressionsGlobal } from './CSE.js';
+import { optimizeWithEGraph } from './egraph/index.js';
 import { CodeGenError } from './Errors.js';
 import { serializeExpression } from './ExpressionUtils.js';
 import { inlineExpression } from './Inliner.js';
@@ -31,6 +32,7 @@ export interface CodeGenOptions {
   includeComments?: boolean;
   simplify?: boolean;
   cse?: boolean;
+  useEGraph?: boolean;  // Use e-graph optimization instead of CSE (experimental)
   epsilon?: number;  // Add epsilon guards for zero denominators
   emitGuards?: boolean;  // Emit runtime guards for edge cases
   csharpFloatType?: 'float' | 'double';  // C# float precision
@@ -484,7 +486,10 @@ export function generateGradientFunction(
     }
 
     // Run CSE globally across ALL gradient expressions
-    const globalCSE = eliminateCommonSubexpressionsGlobal(allGradientComponents);
+    // Use e-graph optimization if enabled, otherwise use traditional CSE
+    const globalCSE = options.useEGraph
+      ? optimizeWithEGraph(allGradientComponents, { verbose: false })
+      : eliminateCommonSubexpressionsGlobal(allGradientComponents);
     cseIntermediates = globalCSE.intermediates;
 
     // Update gradient components with globally CSE-simplified versions
@@ -494,29 +499,23 @@ export function generateGradientFunction(
         gradient.components = simplifiedComponents;
       }
     }
-
-    // Generate intermediate variables from CSE
-    if (cseIntermediates.size > 0) {
-      for (const [varName, expr] of cseIntermediates.entries()) {
-        const code = codegen.generate(expr);
-        if (format === 'typescript' || format === 'javascript') {
-          lines.push(`  const ${varName} = ${code};`);
-        } else if (format === 'python') {
-          lines.push(`  ${varName} = ${code}`);
-        } else if (format === 'csharp') {
-          lines.push(`    ${csharpFloatType} ${varName} = ${code};`);
-        }
-      }
-      lines.push('');
-    }
   }
 
   // Detect repeated divisions and precalculate inverses
+  // Count in BOTH CSE intermediates AND gradient expressions
   const divisionDenominators = new Map<string, number>(); // denominator serialization -> count
+  const denominatorExprs = new Map<string, Expression>(); // denominator serialization -> expression
+
+  // Count in CSE intermediates
+  for (const expr of cseIntermediates.values()) {
+    countDivisionDenominators(expr, divisionDenominators, denominatorExprs);
+  }
+
+  // Count in gradient expressions
   for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
     if (isStructuredGradient(gradient)) {
       for (const expr of gradient.components.values()) {
-        countDivisionDenominators(expr, divisionDenominators);
+        countDivisionDenominators(expr, divisionDenominators, denominatorExprs);
       }
     }
   }
@@ -531,39 +530,14 @@ export function generateGradientFunction(
     }
   }
 
-  // Generate inverse variables
+  // Substitute divisions with multiplications by inverse in BOTH CSE temps and gradients
   if (inverseVarMap.size > 0) {
-    const generatedInverses = new Set<string>();
-
-    for (const [denomKey, invVarName] of inverseVarMap.entries()) {
-      if (generatedInverses.has(denomKey)) continue;
-
-      // Find the denominator expression in any gradient
-      let found = false;
-      for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
-        if (found) break;
-        if (isStructuredGradient(gradient)) {
-          for (const expr of gradient.components.values()) {
-            const denomExpr = findDenominatorByKey(expr, denomKey);
-            if (denomExpr) {
-              const code = codegen.generate(denomExpr);
-              if (format === 'typescript' || format === 'javascript') {
-                lines.push(`  const ${invVarName} = 1 / ${code};`);
-              } else if (format === 'python') {
-                lines.push(`  ${invVarName} = 1 / ${code}`);
-              } else if (format === 'csharp') {
-                lines.push(`    ${csharpFloatType} ${invVarName} = 1 / ${code};`);
-              }
-              generatedInverses.add(denomKey);
-              found = true;
-              break;
-            }
-          }
-        }
-      }
+    // Substitute in CSE intermediates
+    for (const [varName, expr] of cseIntermediates.entries()) {
+      cseIntermediates.set(varName, substituteDivisionsWithInverse(expr, inverseVarMap));
     }
 
-    // Substitute divisions with multiplications by inverse
+    // Substitute in gradients
     for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
       if (isStructuredGradient(gradient)) {
         for (const [comp, expr] of gradient.components.entries()) {
@@ -571,7 +545,90 @@ export function generateGradientFunction(
         }
       }
     }
+  }
 
+  // Categorize inverses: "early" (don't depend on CSE temps) vs "late" (depend on CSE temps)
+  const earlyInverses: Array<{ denomKey: string; invVarName: string }> = [];
+  const lateInverses = new Map<string, { denomKey: string; invVarName: string }>(); // CSE temp name -> inverse info
+
+  for (const [denomKey, invVarName] of inverseVarMap.entries()) {
+    const denomExpr = denominatorExprs.get(denomKey);
+    if (denomExpr) {
+      // Check if denominator references any CSE temps
+      const referencedTemps = findReferencedTemps(denomExpr, cseIntermediates);
+      if (referencedTemps.size === 0) {
+        // Denominator doesn't reference CSE temps - can generate early
+        earlyInverses.push({ denomKey, invVarName });
+      } else {
+        // Denominator references CSE temps - need to generate after those temps
+        // Find the "last" temp it depends on (we'll generate inverse after that temp)
+        // For now, use a simple heuristic: if denominator IS a temp variable, use that
+        if (denomExpr.kind === 'variable' && cseIntermediates.has(denomExpr.name)) {
+          lateInverses.set(denomExpr.name, { denomKey, invVarName });
+        } else {
+          // Complex expression - find the last CSE temp it references
+          // For simplicity, just add to early inverses but it won't work...
+          // Actually, we need to generate after ALL referenced temps
+          // Let's track the last temp alphabetically (a rough approximation of order)
+          let lastTemp = '';
+          for (const temp of referencedTemps) {
+            if (temp > lastTemp) lastTemp = temp;
+          }
+          if (lastTemp) {
+            lateInverses.set(lastTemp, { denomKey, invVarName });
+          } else {
+            earlyInverses.push({ denomKey, invVarName });
+          }
+        }
+      }
+    }
+  }
+
+  // Generate early inverse variables (denominators that don't reference CSE temps)
+  for (const { denomKey, invVarName } of earlyInverses) {
+    const denomExpr = denominatorExprs.get(denomKey);
+    if (denomExpr) {
+      const code = codegen.generate(denomExpr);
+      if (format === 'typescript' || format === 'javascript') {
+        lines.push(`  const ${invVarName} = 1 / ${code};`);
+      } else if (format === 'python') {
+        lines.push(`  ${invVarName} = 1 / ${code}`);
+      } else if (format === 'csharp') {
+        lines.push(`    ${csharpFloatType} ${invVarName} = 1 / ${code};`);
+      }
+    }
+  }
+
+  // Generate CSE intermediate variables, interleaving late inverses
+  if (cseIntermediates.size > 0) {
+    for (const [varName, expr] of cseIntermediates.entries()) {
+      const code = codegen.generate(expr);
+      if (format === 'typescript' || format === 'javascript') {
+        lines.push(`  const ${varName} = ${code};`);
+      } else if (format === 'python') {
+        lines.push(`  ${varName} = ${code}`);
+      } else if (format === 'csharp') {
+        lines.push(`    ${csharpFloatType} ${varName} = ${code};`);
+      }
+
+      // Check if we need to generate an inverse after this temp
+      const invInfo = lateInverses.get(varName);
+      if (invInfo) {
+        const denomExpr = denominatorExprs.get(invInfo.denomKey);
+        if (denomExpr) {
+          const invCode = codegen.generate(denomExpr);
+          if (format === 'typescript' || format === 'javascript') {
+            lines.push(`  const ${invInfo.invVarName} = 1 / ${invCode};`);
+          } else if (format === 'python') {
+            lines.push(`  ${invInfo.invVarName} = 1 / ${invCode}`);
+          } else if (format === 'csharp') {
+            lines.push(`    ${csharpFloatType} ${invInfo.invVarName} = 1 / ${invCode};`);
+          }
+        }
+      }
+    }
+    lines.push('');
+  } else if (earlyInverses.length > 0) {
     lines.push('');
   }
 
@@ -823,28 +880,70 @@ function isStructuredGradient(grad: Expression | StructuredGradient): grad is St
 /**
  * Count occurrences of division denominators in an expression
  */
-function countDivisionDenominators(expr: Expression, counts: Map<string, number>): void {
+function countDivisionDenominators(
+  expr: Expression,
+  counts: Map<string, number>,
+  denominators: Map<string, Expression>
+): void {
   switch (expr.kind) {
     case 'binary':
       if (expr.operator === '/') {
         const denomKey = serializeExpression(expr.right);
         counts.set(denomKey, (counts.get(denomKey) || 0) + 1);
+        if (!denominators.has(denomKey)) {
+          denominators.set(denomKey, expr.right);
+        }
       }
-      countDivisionDenominators(expr.left, counts);
-      countDivisionDenominators(expr.right, counts);
+      countDivisionDenominators(expr.left, counts, denominators);
+      countDivisionDenominators(expr.right, counts, denominators);
       break;
     case 'unary':
-      countDivisionDenominators(expr.operand, counts);
+      countDivisionDenominators(expr.operand, counts, denominators);
       break;
     case 'call':
       for (const arg of expr.args) {
-        countDivisionDenominators(arg, counts);
+        countDivisionDenominators(arg, counts, denominators);
       }
       break;
     case 'component':
-      countDivisionDenominators(expr.object, counts);
+      countDivisionDenominators(expr.object, counts, denominators);
       break;
   }
+}
+
+/**
+ * Find all CSE temp variable names referenced in an expression
+ */
+function findReferencedTemps(expr: Expression, cseIntermediates: Map<string, Expression>): Set<string> {
+  const result = new Set<string>();
+
+  function visit(e: Expression): void {
+    switch (e.kind) {
+      case 'variable':
+        if (cseIntermediates.has(e.name)) {
+          result.add(e.name);
+        }
+        break;
+      case 'binary':
+        visit(e.left);
+        visit(e.right);
+        break;
+      case 'unary':
+        visit(e.operand);
+        break;
+      case 'call':
+        for (const arg of e.args) {
+          visit(arg);
+        }
+        break;
+      case 'component':
+        visit(e.object);
+        break;
+    }
+  }
+
+  visit(expr);
+  return result;
 }
 
 /**

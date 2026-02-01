@@ -96,6 +96,7 @@ Options:
   --format <format>     Output format: typescript (default), javascript, python, csharp
   --no-simplify         Disable gradient simplification
   --no-cse              Disable common subexpression elimination
+  --egraph              Use e-graph optimization instead of CSE (experimental)
   --no-comments         Omit comments in generated code
   --guards              Emit runtime guards for division by zero (experimental)
   --epsilon <value>     Epsilon value for guards (default: 1e-10)
@@ -168,6 +169,8 @@ function main() {
       options.simplify = false;
     } else if (arg === '--no-cse') {
       options.cse = false;
+    } else if (arg === '--egraph') {
+      options.useEGraph = true;
     } else if (arg === '--no-comments') {
       options.includeComments = false;
     } else if (arg === '--guards') {

@@ -49,6 +49,19 @@ function makeUnary(operator: '-', operand: Expression): Expression {
 }
 
 /**
+ * Check if an expression is trivial (should never be a temp)
+ * - Constants: 5, -2, etc.
+ * - Simple negations of constants: -(2)
+ * - Variables: a, b
+ */
+function isTrivialExpression(expr: Expression): boolean {
+  if (expr.kind === 'number') return true;
+  if (expr.kind === 'variable') return true;
+  if (expr.kind === 'unary' && expr.operand.kind === 'number') return true;
+  return false;
+}
+
+/**
  * Cost of different operations
  * Higher cost = less preferred
  */
@@ -141,6 +154,12 @@ export function extractWithCSE(
   const temps = new Map<string, Expression>();
   for (const [classId, tempName] of tempsToExtract) {
     const expr = extractFromClass(egraph, classId, costs, costModel);
+    // Skip trivial expressions that shouldn't be temps
+    // (constants, or simple negations of constants)
+    if (isTrivialExpression(expr)) {
+      tempsToExtract.delete(classId);
+      continue;
+    }
     temps.set(tempName, expr);
   }
 
@@ -269,6 +288,9 @@ export function extractWithCSE(
   // Post-extraction CSE: find repeated patterns that emerge AFTER temp substitution
   // e.g., "_tmp22 + _tmp23" appearing multiple times
   postExtractionCSE(temps, expressions, minSharedCost, tempCounter, costModel);
+
+  // Detect and merge (a-b) / (b-a) patterns (these are negatives of each other)
+  mergeNegativePairs(temps, expressions);
 
   // Calculate total cost
   let totalCost = 0;
@@ -787,6 +809,8 @@ function postExtractionCSE(
     if (count >= 2 && cost > minSharedCost) {
       // Skip if it's just a temp reference
       if (expr.kind === 'variable' && expr.name.startsWith('_tmp')) continue;
+      // Skip trivial expressions (constants, negations of constants)
+      if (isTrivialExpression(expr)) continue;
       toExtract.push({ serialized, expr, cost });
     }
   }
@@ -996,4 +1020,143 @@ function postExtractionCSE(
       temps.set(name, expr);
     }
   }
+}
+
+/**
+ * Detect pairs of temps that are negatives of each other:
+ * e.g., _tmp1 = k * (a - b) and _tmp2 = k * (b - a)
+ * These can be merged: keep _tmp1, replace _tmp2 with -_tmp1
+ */
+function mergeNegativePairs(
+  temps: Map<string, Expression>,
+  expressions: Map<EClassId, Expression>
+): void {
+  // Build a map of "canonical subtraction form" -> temp name
+  // For k * (a - b), the canonical form is [k, a, b] sorted by serialization
+  const subPatterns = new Map<string, { tempName: string; isNegated: boolean; coefficient: Expression | null }>();
+
+  for (const [tempName, expr] of temps) {
+    const pattern = extractSubtractionPattern(expr);
+    if (!pattern) continue;
+
+    const { left, right, coefficient } = pattern;
+    // Canonical form: sort left and right alphabetically
+    const leftSer = serializeExpr(left);
+    const rightSer = serializeExpr(right);
+    const coeffSer = coefficient ? serializeExpr(coefficient) : '';
+
+    let canonKey: string;
+    let isNegated: boolean;
+
+    if (leftSer < rightSer) {
+      canonKey = `${coeffSer}:(${leftSer})-(${rightSer})`;
+      isNegated = false;
+    } else {
+      canonKey = `${coeffSer}:(${rightSer})-(${leftSer})`;
+      isNegated = true;
+    }
+
+    const existing = subPatterns.get(canonKey);
+    if (existing) {
+      // Found a pair! One is the negative of the other
+      // Keep the non-negated one (or the first one if both are same)
+      if (existing.isNegated && !isNegated) {
+        // Current one is better, replace existing
+        replaceTempWithNegation(temps, expressions, existing.tempName, tempName);
+        subPatterns.set(canonKey, { tempName, isNegated, coefficient });
+      } else if (!existing.isNegated && isNegated) {
+        // Existing is better, replace current
+        replaceTempWithNegation(temps, expressions, tempName, existing.tempName);
+      }
+      // If both have same negation status, do nothing
+    } else {
+      subPatterns.set(canonKey, { tempName, isNegated, coefficient });
+    }
+  }
+}
+
+/**
+ * Extract subtraction pattern from expression:
+ * Returns { left, right, coefficient } for patterns like:
+ * - (a - b) -> { left: a, right: b, coefficient: null }
+ * - k * (a - b) -> { left: a, right: b, coefficient: k }
+ */
+function extractSubtractionPattern(expr: Expression): { left: Expression; right: Expression; coefficient: Expression | null } | null {
+  // Direct subtraction: (a - b)
+  if (expr.kind === 'binary' && expr.operator === '-') {
+    return { left: expr.left, right: expr.right, coefficient: null };
+  }
+
+  // Multiplication with subtraction: k * (a - b) or (a - b) * k
+  if (expr.kind === 'binary' && expr.operator === '*') {
+    if (expr.right.kind === 'binary' && expr.right.operator === '-') {
+      return { left: expr.right.left, right: expr.right.right, coefficient: expr.left };
+    }
+    if (expr.left.kind === 'binary' && expr.left.operator === '-') {
+      return { left: expr.left.left, right: expr.left.right, coefficient: expr.right };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Replace all uses of oldTemp with -newTemp, then delete oldTemp
+ */
+function replaceTempWithNegation(
+  temps: Map<string, Expression>,
+  expressions: Map<EClassId, Expression>,
+  oldTemp: string,
+  newTemp: string
+): void {
+  // Create negation expression
+  const negExpr: Expression = {
+    kind: 'unary',
+    operator: '-',
+    operand: { kind: 'variable', name: newTemp }
+  };
+
+  // Helper to replace references
+  function replaceRefs(expr: Expression): Expression {
+    if (expr.kind === 'variable' && expr.name === oldTemp) {
+      return negExpr;
+    }
+    if (expr.kind === 'binary') {
+      const left = replaceRefs(expr.left);
+      const right = replaceRefs(expr.right);
+      return (left === expr.left && right === expr.right) ? expr
+        : { kind: 'binary', operator: expr.operator, left, right };
+    }
+    if (expr.kind === 'unary') {
+      const operand = replaceRefs(expr.operand);
+      return (operand === expr.operand) ? expr
+        : { kind: 'unary', operator: expr.operator, operand };
+    }
+    if (expr.kind === 'call') {
+      const args = expr.args.map(replaceRefs);
+      return args.every((a, i) => a === expr.args[i]) ? expr
+        : { kind: 'call', name: expr.name, args };
+    }
+    if (expr.kind === 'component') {
+      const object = replaceRefs(expr.object);
+      return (object === expr.object) ? expr
+        : { kind: 'component', object, component: expr.component };
+    }
+    return expr;
+  }
+
+  // Replace in all temps (except the one we're deleting)
+  for (const [name, expr] of temps) {
+    if (name !== oldTemp) {
+      temps.set(name, replaceRefs(expr));
+    }
+  }
+
+  // Replace in root expressions
+  for (const [rootId, expr] of expressions) {
+    expressions.set(rootId, replaceRefs(expr));
+  }
+
+  // Delete the old temp - its uses have been replaced with -newTemp
+  temps.delete(oldTemp);
 }

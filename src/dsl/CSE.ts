@@ -91,6 +91,60 @@ export function eliminateCommonSubexpressionsStructured(
 }
 
 /**
+ * Result of global CSE across all gradients
+ */
+export interface GlobalCSEResult {
+  intermediates: Map<string, Expression>;
+  gradients: Map<string, Map<string, Expression>>;
+}
+
+/**
+ * Perform CSE globally across ALL gradient expressions
+ * This avoids duplicate intermediate variables like _tmp0 and _tmp4 both being len1*len2
+ */
+export function eliminateCommonSubexpressionsGlobal(
+  allGradients: Map<string, Map<string, Expression>>,
+  minCount: number = 2
+): GlobalCSEResult {
+  const counter = new ExpressionCounter();
+
+  // Count ALL expressions across all gradients
+  for (const components of allGradients.values()) {
+    for (const expr of components.values()) {
+      counter.count(expr);
+    }
+  }
+
+  const intermediates = new Map<string, Expression>();
+  let varCounter = 0;
+  const subexprMap = new Map<string, string>();
+
+  // Find common subexpressions
+  for (const [exprStr, count] of counter.counts.entries()) {
+    if (count >= minCount) {
+      const parsed = counter.expressions.get(exprStr);
+      if (parsed && shouldExtract(parsed)) {
+        const varName = `_tmp${varCounter++}`;
+        intermediates.set(varName, parsed);
+        subexprMap.set(exprStr, varName);
+      }
+    }
+  }
+
+  // Apply substitutions to all gradients
+  const simplifiedGradients = new Map<string, Map<string, Expression>>();
+  for (const [paramName, components] of allGradients.entries()) {
+    const simplifiedComponents = new Map<string, Expression>();
+    for (const [comp, expr] of components.entries()) {
+      simplifiedComponents.set(comp, substituteExpressions(expr, subexprMap, counter));
+    }
+    simplifiedGradients.set(paramName, simplifiedComponents);
+  }
+
+  return { intermediates, gradients: simplifiedGradients };
+}
+
+/**
  * Check if an expression should be extracted
  */
 function shouldExtract(expr: Expression): boolean {

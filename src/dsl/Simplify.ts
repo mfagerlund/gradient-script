@@ -60,6 +60,25 @@ class Simplifier extends ExpressionTransformer {
       if (expressionsEqual(left, right)) {
         return { kind: 'number', value: 0 };
       }
+      // a - (-b) → a + b
+      if (right.kind === 'unary' && right.operator === '-') {
+        return this.transform({
+          kind: 'binary',
+          operator: '+',
+          left,
+          right: right.operand
+        });
+      }
+      // (-a) - (-b) → b - a
+      if (left.kind === 'unary' && left.operator === '-' &&
+          right.kind === 'unary' && right.operator === '-') {
+        return this.transform({
+          kind: 'binary',
+          operator: '-',
+          left: right.operand,
+          right: left.operand
+        });
+      }
     }
 
     // Multiplication rules
@@ -68,6 +87,15 @@ class Simplifier extends ExpressionTransformer {
       if (rightNum === 0) return { kind: 'number', value: 0 };
       if (leftNum === 1) return right;
       if (rightNum === 1) return left;
+
+      // -1 * x → -x
+      if (leftNum === -1) {
+        return { kind: 'unary', operator: '-', operand: right };
+      }
+      // x * -1 → -x
+      if (rightNum === -1) {
+        return { kind: 'unary', operator: '-', operand: left };
+      }
 
       // (x / x) * y → y
       if (left.kind === 'binary' && left.operator === '/') {

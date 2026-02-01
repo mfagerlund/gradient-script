@@ -18,7 +18,7 @@ import { Type, Types, TypeEnv } from './Types.js';
 import { GradientResult, StructuredGradient } from './Differentiation.js';
 import { simplifyGradients } from './Simplify.js';
 import { ExpressionTransformer } from './ExpressionTransformer.js';
-import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions } from './CSE.js';
+import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions, eliminateCommonSubexpressionsGlobal } from './CSE.js';
 import { CodeGenError } from './Errors.js';
 import { serializeExpression } from './ExpressionUtils.js';
 import { inlineExpression } from './Inliner.js';
@@ -470,42 +470,33 @@ export function generateGradientFunction(
     lines.push(`  ${comment} Gradients`);
   }
 
-  // Apply CSE if requested
+  // Apply CSE if requested - use GLOBAL CSE across all gradients
   const shouldApplyCSE = options.cse !== false; // Default to true
-  const cseIntermediates = new Map<string, Expression>();
+  let cseIntermediates = new Map<string, Expression>();
 
   if (shouldApplyCSE) {
-    // Collect all gradient expressions for CSE analysis
+    // Collect all gradient components into a single map for global CSE
+    const allGradientComponents = new Map<string, Map<string, Expression>>();
     for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
       if (isStructuredGradient(gradient)) {
-        const cseResult = eliminateCommonSubexpressionsStructured(gradient.components);
+        allGradientComponents.set(paramName, gradient.components);
+      }
+    }
 
-        // Merge intermediates
-        for (const [name, expr] of cseResult.intermediates.entries()) {
-          cseIntermediates.set(name, expr);
-        }
+    // Run CSE globally across ALL gradient expressions
+    const globalCSE = eliminateCommonSubexpressionsGlobal(allGradientComponents);
+    cseIntermediates = globalCSE.intermediates;
 
-        // Update gradient components with CSE-simplified versions
-        gradient.components = cseResult.components;
+    // Update gradient components with globally CSE-simplified versions
+    for (const [paramName, simplifiedComponents] of globalCSE.gradients.entries()) {
+      const gradient = gradientsToUse.gradients.get(paramName);
+      if (gradient && isStructuredGradient(gradient)) {
+        gradient.components = simplifiedComponents;
       }
     }
 
     // Generate intermediate variables from CSE
     if (cseIntermediates.size > 0) {
-      // Check if we should emit guards (opt-in)
-      const shouldEmitGuards = options.emitGuards === true;
-      const epsilon = options.epsilon || 1e-10;
-
-      // Identify potential denominators (sum of squares patterns)
-      const denominatorVars = new Set<string>();
-      for (const [varName, expr] of cseIntermediates.entries()) {
-        const code = codegen.generate(expr);
-        // Check if this looks like a denominator (contains + and squared terms)
-        if (code.includes('+') && (code.includes('* ') || code.includes('Math.pow'))) {
-          denominatorVars.add(varName);
-        }
-      }
-
       for (const [varName, expr] of cseIntermediates.entries()) {
         const code = codegen.generate(expr);
         if (format === 'typescript' || format === 'javascript') {
@@ -516,36 +507,72 @@ export function generateGradientFunction(
           lines.push(`    ${csharpFloatType} ${varName} = ${code};`);
         }
       }
+      lines.push('');
+    }
+  }
 
-      // Emit epsilon guard if needed
-      if (shouldEmitGuards && denominatorVars.size > 0) {
-        lines.push('');
-        if (includeComments) {
-          lines.push(`  ${comment} Guard against division by zero`);
-        }
-        for (const denom of denominatorVars) {
-          if (format === 'typescript' || format === 'javascript') {
-            lines.push(`  if (Math.abs(${denom}) < ${epsilon}) {`);
-            lines.push(`    ${comment} Return zero gradients for degenerate case`);
-            // Emit zero gradient structure
-            const zeroGrads: string[] = [];
-            for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
-              if (isStructuredGradient(gradient)) {
-                const components = Array.from(gradient.components.keys());
-                const zeroStruct = components.map(c => `${c}: 0`).join(', ');
-                zeroGrads.push(`d${paramName}: { ${zeroStruct} }`);
-              } else {
-                zeroGrads.push(`d${paramName}: 0`);
+  // Detect repeated divisions and precalculate inverses
+  const divisionDenominators = new Map<string, number>(); // denominator serialization -> count
+  for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
+    if (isStructuredGradient(gradient)) {
+      for (const expr of gradient.components.values()) {
+        countDivisionDenominators(expr, divisionDenominators);
+      }
+    }
+  }
+
+  // Create inverse variables for denominators used 2+ times
+  const inverseVarMap = new Map<string, string>(); // serialized denominator -> inverse var name
+  let invCounter = 0;
+  for (const [denomKey, count] of divisionDenominators.entries()) {
+    if (count >= 2) {
+      const invVarName = `_inv${invCounter++}`;
+      inverseVarMap.set(denomKey, invVarName);
+    }
+  }
+
+  // Generate inverse variables
+  if (inverseVarMap.size > 0) {
+    const generatedInverses = new Set<string>();
+
+    for (const [denomKey, invVarName] of inverseVarMap.entries()) {
+      if (generatedInverses.has(denomKey)) continue;
+
+      // Find the denominator expression in any gradient
+      let found = false;
+      for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
+        if (found) break;
+        if (isStructuredGradient(gradient)) {
+          for (const expr of gradient.components.values()) {
+            const denomExpr = findDenominatorByKey(expr, denomKey);
+            if (denomExpr) {
+              const code = codegen.generate(denomExpr);
+              if (format === 'typescript' || format === 'javascript') {
+                lines.push(`  const ${invVarName} = 1 / ${code};`);
+              } else if (format === 'python') {
+                lines.push(`  ${invVarName} = 1 / ${code}`);
+              } else if (format === 'csharp') {
+                lines.push(`    ${csharpFloatType} ${invVarName} = 1 / ${code};`);
               }
+              generatedInverses.add(denomKey);
+              found = true;
+              break;
             }
-            lines.push(`    return { value, ${zeroGrads.join(', ')} };`);
-            lines.push(`  }`);
           }
         }
       }
-
-      lines.push('');
     }
+
+    // Substitute divisions with multiplications by inverse
+    for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
+      if (isStructuredGradient(gradient)) {
+        for (const [comp, expr] of gradient.components.entries()) {
+          gradient.components.set(comp, substituteDivisionsWithInverse(expr, inverseVarMap));
+        }
+      }
+    }
+
+    lines.push('');
   }
 
   for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
@@ -791,4 +818,108 @@ function reuseForwardExpressionsInGradients(
  */
 function isStructuredGradient(grad: Expression | StructuredGradient): grad is StructuredGradient {
   return 'components' in grad;
+}
+
+/**
+ * Count occurrences of division denominators in an expression
+ */
+function countDivisionDenominators(expr: Expression, counts: Map<string, number>): void {
+  switch (expr.kind) {
+    case 'binary':
+      if (expr.operator === '/') {
+        const denomKey = serializeExpression(expr.right);
+        counts.set(denomKey, (counts.get(denomKey) || 0) + 1);
+      }
+      countDivisionDenominators(expr.left, counts);
+      countDivisionDenominators(expr.right, counts);
+      break;
+    case 'unary':
+      countDivisionDenominators(expr.operand, counts);
+      break;
+    case 'call':
+      for (const arg of expr.args) {
+        countDivisionDenominators(arg, counts);
+      }
+      break;
+    case 'component':
+      countDivisionDenominators(expr.object, counts);
+      break;
+  }
+}
+
+/**
+ * Find the actual denominator expression by its serialized key
+ */
+function findDenominatorByKey(expr: Expression, targetKey: string): Expression | null {
+  switch (expr.kind) {
+    case 'binary':
+      if (expr.operator === '/' && serializeExpression(expr.right) === targetKey) {
+        return expr.right;
+      }
+      return findDenominatorByKey(expr.left, targetKey) || findDenominatorByKey(expr.right, targetKey);
+    case 'unary':
+      return findDenominatorByKey(expr.operand, targetKey);
+    case 'call':
+      for (const arg of expr.args) {
+        const found = findDenominatorByKey(arg, targetKey);
+        if (found) return found;
+      }
+      return null;
+    case 'component':
+      return findDenominatorByKey(expr.object, targetKey);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Substitute divisions with multiplications by precalculated inverse
+ */
+function substituteDivisionsWithInverse(expr: Expression, inverseMap: Map<string, string>): Expression {
+  switch (expr.kind) {
+    case 'number':
+    case 'variable':
+      return expr;
+
+    case 'binary':
+      const left = substituteDivisionsWithInverse(expr.left, inverseMap);
+      const right = substituteDivisionsWithInverse(expr.right, inverseMap);
+
+      if (expr.operator === '/') {
+        const denomKey = serializeExpression(expr.right);
+        const invVar = inverseMap.get(denomKey);
+        if (invVar) {
+          // Replace a / b with a * _inv_b
+          return {
+            kind: 'binary',
+            operator: '*',
+            left,
+            right: { kind: 'variable', name: invVar }
+          };
+        }
+      }
+
+      return { kind: 'binary', operator: expr.operator, left, right };
+
+    case 'unary':
+      return {
+        kind: 'unary',
+        operator: expr.operator,
+        operand: substituteDivisionsWithInverse(expr.operand, inverseMap)
+      };
+
+    case 'call':
+      return {
+        kind: 'call',
+        name: expr.name,
+        args: expr.args.map(arg => substituteDivisionsWithInverse(arg, inverseMap))
+      };
+
+    case 'component':
+      return {
+        kind: 'component',
+        object: substituteDivisionsWithInverse(expr.object, inverseMap),
+        component: expr.component
+      };
+  }
 }

@@ -8,6 +8,76 @@ import { generateComplete } from './dsl/CodeGen.js';
 import type { CodeGenOptions } from './dsl/CodeGen.js';
 import { analyzeGuards, formatGuardWarnings } from './dsl/Guards.js';
 import { ParseError, formatParseError } from './dsl/Errors.js';
+import { GradientChecker, formatGradCheckResult } from './dsl/GradientChecker.js';
+import { Types } from './dsl/Types.js';
+import type { FunctionDef, Parameter } from './dsl/AST.js';
+import type { TypeEnv } from './dsl/Types.js';
+
+/**
+ * Generate random test points for gradient verification.
+ * Uses multiple test points to catch errors at different values.
+ */
+function generateTestPoints(func: FunctionDef, env: TypeEnv): Map<string, number | Record<string, number>>[] {
+  const testPoints: Map<string, number | Record<string, number>>[] = [];
+
+  // Generate 3 different test points with varying scales
+  const scales = [1.0, 0.1, 10.0];
+
+  for (const scale of scales) {
+    const point = new Map<string, number | Record<string, number>>();
+
+    for (const param of func.parameters) {
+      const paramType = env.getOrThrow(param.name);
+
+      if (Types.isScalar(paramType)) {
+        // Random scalar in range [-scale, scale], avoid zero
+        point.set(param.name, (Math.random() * 2 - 1) * scale + 0.1 * scale);
+      } else {
+        // Structured type - get components
+        const struct: Record<string, number> = {};
+        for (const comp of paramType.components) {
+          struct[comp] = (Math.random() * 2 - 1) * scale + 0.1 * scale;
+        }
+        point.set(param.name, struct);
+      }
+    }
+
+    testPoints.push(point);
+  }
+
+  return testPoints;
+}
+
+/**
+ * Verify gradients for a function using numerical differentiation.
+ * Returns true if all gradients pass, false otherwise.
+ */
+function verifyGradients(func: FunctionDef, gradients: ReturnType<typeof computeFunctionGradients>, env: TypeEnv): boolean {
+  const checker = new GradientChecker(1e-5, 1e-4);
+  const testPoints = generateTestPoints(func, env);
+
+  let allPassed = true;
+
+  for (let i = 0; i < testPoints.length; i++) {
+    const result = checker.check(func, gradients, env, testPoints[i]);
+
+    if (!result.passed) {
+      if (allPassed) {
+        // First failure - print header
+        console.error(`\nGradient verification FAILED for "${func.name}":`);
+      }
+      console.error(`  Test point ${i + 1}: ${formatGradCheckResult(result, func.name)}`);
+      allPassed = false;
+    }
+  }
+
+  if (allPassed) {
+    const result = checker.check(func, gradients, env, testPoints[0]);
+    console.error(formatGradCheckResult(result, func.name));
+  }
+
+  return allPassed;
+}
 
 function printUsage() {
   console.log(`
@@ -143,10 +213,17 @@ function main() {
     }
 
     const outputs: string[] = [];
+    let hasVerificationFailure = false;
 
     program.functions.forEach((func, index) => {
       const env = inferFunction(func);
       const gradients = computeFunctionGradients(func, env);
+
+      // MANDATORY gradient verification
+      const verified = verifyGradients(func, gradients, env);
+      if (!verified) {
+        hasVerificationFailure = true;
+      }
 
       const guardAnalysis = analyzeGuards(func);
       if (guardAnalysis.hasIssues) {
@@ -162,6 +239,11 @@ function main() {
       const code = generateComplete(func, gradients, env, perFunctionOptions);
       outputs.push(code);
     });
+
+    if (hasVerificationFailure) {
+      console.error('\nERROR: Gradient verification failed. Output may contain incorrect gradients!');
+      process.exit(1);
+    }
 
     console.log(outputs.join('\n\n'));
   } catch (err) {

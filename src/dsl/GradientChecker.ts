@@ -25,6 +25,42 @@ export interface GradCheckResult {
   errors: GradCheckError[];
   maxError: number;
   meanError: number;
+  totalChecks: number;
+}
+
+/**
+ * Format gradient check results as a human-readable string
+ */
+export function formatGradCheckResult(result: GradCheckResult, funcName: string): string {
+  if (result.passed) {
+    return `✓ ${funcName}: ${result.totalChecks} gradients verified (max error: ${result.maxError.toExponential(2)})`;
+  }
+
+  const lines: string[] = [
+    `✗ ${funcName}: ${result.errors.length}/${result.totalChecks} gradients FAILED`
+  ];
+
+  // Group errors by parameter
+  const byParam = new Map<string, GradCheckError[]>();
+  for (const err of result.errors) {
+    const key = err.parameter;
+    if (!byParam.has(key)) byParam.set(key, []);
+    byParam.get(key)!.push(err);
+  }
+
+  for (const [param, errs] of byParam) {
+    if (errs.length === 1 && !errs[0].component) {
+      // Scalar parameter
+      const e = errs[0];
+      lines.push(`  ${param}: analytical=${e.analytical.toFixed(6)}, numerical=${e.numerical.toFixed(6)}, error=${e.error.toExponential(2)}`);
+    } else {
+      // Structured parameter - show on one line if possible
+      const components = errs.map(e => `${e.component}:${e.error.toExponential(1)}`).join(', ');
+      lines.push(`  ${param}: {${components}}`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 export interface GradCheckError {
@@ -58,6 +94,7 @@ export class GradientChecker {
     testPoint: Map<string, NumValue>
   ): GradCheckResult {
     const errors: GradCheckError[] = [];
+    let totalChecks = 0;
 
     // For each parameter that has gradients
     for (const [paramName, gradient] of gradients.gradients.entries()) {
@@ -70,6 +107,7 @@ export class GradientChecker {
 
       if (Types.isScalar(paramType)) {
         // Scalar parameter
+        totalChecks++;
         if (typeof paramValue !== 'number') {
           throw new Error(`Expected scalar value for ${paramName}`);
         }
@@ -80,7 +118,7 @@ export class GradientChecker {
         const error = Math.abs(analytical - numerical);
         const relativeError = Math.abs(error / (numerical + 1e-10));
 
-        if (error > this.tolerance && relativeError > this.tolerance) {
+        if (error > this.tolerance || relativeError > this.tolerance) {
           errors.push({
             parameter: paramName,
             analytical,
@@ -98,13 +136,14 @@ export class GradientChecker {
         const structGrad = gradient as StructuredGradient;
 
         for (const [comp, expr] of structGrad.components.entries()) {
+          totalChecks++;
           const analytical = this.evaluateExpression(expr, testPoint);
           const numerical = this.numericalGradientComponent(func, testPoint, paramName, comp);
 
           const error = Math.abs(analytical - numerical);
           const relativeError = Math.abs(error / (numerical + 1e-10));
 
-          if (error > this.tolerance && relativeError > this.tolerance) {
+          if (error > this.tolerance || relativeError > this.tolerance) {
             errors.push({
               parameter: paramName,
               component: comp,
@@ -127,7 +166,8 @@ export class GradientChecker {
       passed: errors.length === 0,
       errors,
       maxError,
-      meanError
+      meanError,
+      totalChecks
     };
   }
 

@@ -47,3 +47,15 @@ export function inlineIntermediateVariables(func: FunctionDef): Expression {
   const transformer = new VariableSubstitutionTransformer(substitutions);
   return transformer.transform(func.returnExpr);
 }
+
+/**
+ * Inline an expression using a substitution map
+ * Used to get the fully-expanded form of forward pass expressions
+ */
+export function inlineExpression(
+  expr: Expression,
+  substitutions: Map<string, Expression>
+): Expression {
+  const transformer = new VariableSubstitutionTransformer(substitutions);
+  return transformer.transform(expr);
+}

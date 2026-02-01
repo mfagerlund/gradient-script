@@ -121,3 +121,55 @@ export function checkVec2Gradient(
   const testPoint = new Map(Object.entries(params));
   return checkGradient(source, testPoint);
 }
+
+/**
+ * Check gradients for a 3D vector function
+ *
+ * @param source - GradientScript source code
+ * @param params - Map of parameter names to 3D vectors {x, y, z}
+ * @returns Gradient check result
+ *
+ * @example
+ * const result = checkVec3Gradient(`
+ *   function dot3d(u∇: {x, y, z}, v∇: {x, y, z}) {
+ *     return u.x * v.x + u.y * v.y + u.z * v.z
+ *   }
+ * `, {
+ *   u: { x: 1, y: 2, z: 3 },
+ *   v: { x: 4, y: 5, z: 6 }
+ * });
+ *
+ * expect(result.passed).toBe(true);
+ */
+export function checkVec3Gradient(
+  source: string,
+  params: Record<string, { x: number; y: number; z: number }>
+): GradCheckResult {
+  const testPoint = new Map(Object.entries(params));
+  return checkGradient(source, testPoint);
+}
+
+/**
+ * Check gradients at multiple test points for better coverage
+ *
+ * @param source - GradientScript source code
+ * @param testPointsGenerator - Function that generates test points
+ * @param numPoints - Number of test points to check
+ * @returns Array of gradient check results
+ */
+export function checkGradientMultiplePoints(
+  source: string,
+  testPointsGenerator: () => Map<string, any>,
+  numPoints: number = 5
+): GradCheckResult[] {
+  const { func, env, gradients } = parseAndCompile(source);
+  const checker = new GradientChecker();
+  const results: GradCheckResult[] = [];
+
+  for (let i = 0; i < numPoints; i++) {
+    const testPoint = testPointsGenerator();
+    results.push(checker.check(func, gradients, env, testPoint));
+  }
+
+  return results;
+}

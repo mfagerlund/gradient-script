@@ -21,6 +21,7 @@ import { ExpressionTransformer } from './ExpressionTransformer.js';
 import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions } from './CSE.js';
 import { CodeGenError } from './Errors.js';
 import { serializeExpression } from './ExpressionUtils.js';
+import { inlineExpression } from './Inliner.js';
 
 /**
  * Code generation options
@@ -377,15 +378,33 @@ export function generateGradientFunction(
   // Track which expressions are already computed for CSE reuse
   const forwardExpressionMap = new Map<string, string>();
 
+  // Build substitution map for inlining (to match gradient expressions which are fully inlined)
+  const substitutionMap = new Map<string, Expression>();
+  for (const stmt of func.body) {
+    if (stmt.kind === 'assignment') {
+      substitutionMap.set(stmt.variable, stmt.expression);
+    }
+  }
+
   for (const stmt of func.body) {
     if (stmt.kind === 'assignment') {
       const varName = stmt.variable;
       const generatedExpr = codegen.generate(stmt.expression);
 
       if (shouldTrackForForwardReuse(stmt.expression)) {
+        // Register the original expression
         const exprKey = serializeExpression(stmt.expression);
         if (!forwardExpressionMap.has(exprKey)) {
           forwardExpressionMap.set(exprKey, varName);
+        }
+
+        // Also register the fully inlined form (this is what gradient expressions will have)
+        // Gradient expressions are computed after full inlining, so we need to match against
+        // the inlined form to enable forward expression reuse
+        const inlinedExpr = inlineExpression(stmt.expression, substitutionMap);
+        const inlinedKey = serializeExpression(inlinedExpr);
+        if (inlinedKey !== exprKey && !forwardExpressionMap.has(inlinedKey)) {
+          forwardExpressionMap.set(inlinedKey, varName);
         }
       }
 

@@ -49,6 +49,9 @@ class Simplifier extends ExpressionTransformer {
     if (expr.operator === '+') {
       if (leftNum === 0) return right;
       if (rightNum === 0) return left;
+      // Note: a + a → 2 * a rules are intentionally NOT applied here
+      // because they flatten expression structure and interfere with CSE.
+      // The CSE pass will extract common subexpressions instead.
     }
 
     // Subtraction rules

@@ -141,23 +141,38 @@ export function eliminateCommonSubexpressionsGlobal(
   }
 
   // Post-process: substitute simpler temps into complex temp definitions
-  // Use STRUCTURAL matching (serializeExpression) to avoid canonical confusion
+  // Use CANONICAL matching so a*b matches b*a (consistent with how expressions were counted)
   const processedIntermediates = new Map<string, Expression>();
-  const tempToStructuralKey = new Map<string, string>(); // Maps temp name to structural key of its original expr
+  const tempToOriginalKey = new Map<string, string>(); // Original canonical key (before substitution)
+  const tempToSubstitutedKey = new Map<string, string>(); // Key after simpler temps substituted
 
   for (const { exprStr, expr } of candidates) {
     const varName = subexprMap.get(exprStr)!;
-    tempToStructuralKey.set(varName, serializeExpression(expr));
+    tempToOriginalKey.set(varName, exprStr);
 
     let simplifiedExpr = expr;
-    // Substitute each previously processed temp into this expression
+
+    // PASS 1: Substitute using ORIGINAL keys
+    // This substitutes simpler temps (like _tmp3, _tmp4) into this expression
     for (const [processedVarName] of processedIntermediates) {
-      const structKey = tempToStructuralKey.get(processedVarName);
-      if (structKey) {
-        simplifiedExpr = substituteByStructuralKey(simplifiedExpr, structKey, processedVarName);
+      const origKey = tempToOriginalKey.get(processedVarName);
+      if (origKey) {
+        simplifiedExpr = substituteByCanonicalKey(simplifiedExpr, origKey, processedVarName);
       }
     }
 
+    // PASS 2: Substitute using SUBSTITUTED keys
+    // This substitutes complex temps (like _tmp68) whose definition has been transformed
+    // Now that simpler temps are substituted, complex temps' substituted keys can match
+    for (const [processedVarName] of processedIntermediates) {
+      const subKey = tempToSubstitutedKey.get(processedVarName);
+      if (subKey) {
+        simplifiedExpr = substituteByCanonicalKey(simplifiedExpr, subKey, processedVarName);
+      }
+    }
+
+    // Store the substituted key for later temps to use
+    tempToSubstitutedKey.set(varName, serializeCanonical(simplifiedExpr));
     processedIntermediates.set(varName, simplifiedExpr);
   }
 
@@ -171,7 +186,86 @@ export function eliminateCommonSubexpressionsGlobal(
     simplifiedGradients.set(paramName, simplifiedComponents);
   }
 
-  return { intermediates: processedIntermediates, gradients: simplifiedGradients };
+  // Dead code elimination: remove temps that are never used
+  const finalIntermediates = eliminateDeadTemps(processedIntermediates, simplifiedGradients);
+
+  return { intermediates: finalIntermediates, gradients: simplifiedGradients };
+}
+
+/**
+ * Eliminate dead (unused) temp variables
+ * Iterates until no more dead temps are found
+ */
+function eliminateDeadTemps(
+  intermediates: Map<string, Expression>,
+  gradients: Map<string, Map<string, Expression>>
+): Map<string, Expression> {
+  let current = new Map(intermediates);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    const usageCounts = new Map<string, number>();
+
+    // Initialize counts to 0
+    for (const varName of current.keys()) {
+      usageCounts.set(varName, 0);
+    }
+
+    // Count usages in temp definitions
+    for (const [varName, expr] of current) {
+      countTempUsages(expr, usageCounts);
+    }
+
+    // Count usages in gradient expressions
+    for (const components of gradients.values()) {
+      for (const expr of components.values()) {
+        countTempUsages(expr, usageCounts);
+      }
+    }
+
+    // Remove temps with 0 usages
+    const filtered = new Map<string, Expression>();
+    for (const [varName, expr] of current) {
+      if (usageCounts.get(varName)! > 0) {
+        filtered.set(varName, expr);
+      } else {
+        changed = true; // Found dead code, need another pass
+      }
+    }
+
+    current = filtered;
+  }
+
+  return current;
+}
+
+/**
+ * Count usages of temp variables in an expression
+ */
+function countTempUsages(expr: Expression, counts: Map<string, number>): void {
+  switch (expr.kind) {
+    case 'variable':
+      if (counts.has(expr.name)) {
+        counts.set(expr.name, counts.get(expr.name)! + 1);
+      }
+      break;
+    case 'binary':
+      countTempUsages(expr.left, counts);
+      countTempUsages(expr.right, counts);
+      break;
+    case 'unary':
+      countTempUsages(expr.operand, counts);
+      break;
+    case 'call':
+      for (const arg of expr.args) {
+        countTempUsages(arg, counts);
+      }
+      break;
+    case 'component':
+      countTempUsages(expr.object, counts);
+      break;
+  }
 }
 
 /**
@@ -213,6 +307,51 @@ function substituteByStructuralKey(expr: Expression, structKey: string, replacem
       return {
         kind: 'component',
         object: substituteByStructuralKey(expr.object, structKey, replacement),
+        component: expr.component
+      };
+  }
+}
+
+/**
+ * Substitute subexpressions by canonical key match
+ * Uses serializeCanonical so a*b matches b*a
+ */
+function substituteByCanonicalKey(expr: Expression, canonicalKey: string, replacement: string): Expression {
+  if (serializeCanonical(expr) === canonicalKey) {
+    return { kind: 'variable', name: replacement };
+  }
+
+  switch (expr.kind) {
+    case 'number':
+    case 'variable':
+      return expr;
+
+    case 'binary':
+      return {
+        kind: 'binary',
+        operator: expr.operator,
+        left: substituteByCanonicalKey(expr.left, canonicalKey, replacement),
+        right: substituteByCanonicalKey(expr.right, canonicalKey, replacement)
+      };
+
+    case 'unary':
+      return {
+        kind: 'unary',
+        operator: expr.operator,
+        operand: substituteByCanonicalKey(expr.operand, canonicalKey, replacement)
+      };
+
+    case 'call':
+      return {
+        kind: 'call',
+        name: expr.name,
+        args: expr.args.map(arg => substituteByCanonicalKey(arg, canonicalKey, replacement))
+      };
+
+    case 'component':
+      return {
+        kind: 'component',
+        object: substituteByCanonicalKey(expr.object, canonicalKey, replacement),
         component: expr.component
       };
   }

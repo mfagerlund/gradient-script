@@ -358,8 +358,7 @@ describe('Extraction Quality', () => {
 });
 
 describe('Simplification Issues', () => {
-  it.skip('should simplify -1 * 2 to -2 via rules + constant folding', () => {
-    // TODO: Constant folding not yet implemented
+  it('should simplify -1 * 2 to -2 via rules + constant folding', () => {
     const eg = new EGraph();
 
     // Build: -1 * 2
@@ -648,8 +647,7 @@ describe('Issue: repeated subexpressions should be CSEd', () => {
 });
 
 describe('Issue: 2 * 2 should be folded to 4', () => {
-  it.skip('should fold 2 * 2 to 4 during extraction', () => {
-    // TODO: Constant folding not yet implemented
+  it('should fold 2 * 2 to 4 during extraction', () => {
     const eg = new EGraph();
 
     // Build: 2 * 2 * a

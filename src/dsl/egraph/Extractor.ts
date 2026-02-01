@@ -9,6 +9,45 @@ import { EGraph } from './EGraph.js';
 import { ENode, EClassId, enodeChildren } from './ENode.js';
 import { Expression } from '../AST.js';
 
+// =============================================================================
+// Constant Folding Helpers
+// =============================================================================
+
+/**
+ * Create a binary expression, folding constants when possible
+ */
+function makeBinary(operator: '+' | '-' | '*' | '/' | '^', left: Expression, right: Expression): Expression {
+  // If both operands are numbers, fold the constant
+  if (left.kind === 'number' && right.kind === 'number') {
+    const l = left.value;
+    const r = right.value;
+    let result: number;
+    switch (operator) {
+      case '+': result = l + r; break;
+      case '-': result = l - r; break;
+      case '*': result = l * r; break;
+      case '/': result = r !== 0 ? l / r : NaN; break;
+      case '^': result = Math.pow(l, r); break;
+    }
+    // Only fold if result is a finite number
+    if (Number.isFinite(result)) {
+      return { kind: 'number', value: result };
+    }
+  }
+  return { kind: 'binary', operator, left, right };
+}
+
+/**
+ * Create a unary expression, folding constants when possible
+ */
+function makeUnary(operator: '-', operand: Expression): Expression {
+  // If operand is a number, fold the constant
+  if (operand.kind === 'number') {
+    return { kind: 'number', value: -operand.value };
+  }
+  return { kind: 'unary', operator, operand };
+}
+
 /**
  * Cost of different operations
  * Higher cost = less preferred
@@ -390,7 +429,7 @@ function extractWithTemps(
 }
 
 /**
- * Convert e-node to AST Expression
+ * Convert e-node to AST Expression (with constant folding)
  */
 function nodeToExpression(
   node: ENode,
@@ -398,70 +437,38 @@ function nodeToExpression(
   costs: Map<EClassId, number>,
   costModel: CostModel
 ): Expression {
+  const extract = (id: EClassId) => extractFromClass(egraph, id, costs, costModel);
+
   switch (node.tag) {
     case 'num':
       return { kind: 'number', value: node.value };
     case 'var':
       return { kind: 'variable', name: node.name };
     case 'add':
-      return {
-        kind: 'binary',
-        operator: '+',
-        left: extractFromClass(egraph, node.children[0], costs, costModel),
-        right: extractFromClass(egraph, node.children[1], costs, costModel)
-      };
+      return makeBinary('+', extract(node.children[0]), extract(node.children[1]));
     case 'sub':
-      return {
-        kind: 'binary',
-        operator: '-',
-        left: extractFromClass(egraph, node.children[0], costs, costModel),
-        right: extractFromClass(egraph, node.children[1], costs, costModel)
-      };
+      return makeBinary('-', extract(node.children[0]), extract(node.children[1]));
     case 'mul':
-      return {
-        kind: 'binary',
-        operator: '*',
-        left: extractFromClass(egraph, node.children[0], costs, costModel),
-        right: extractFromClass(egraph, node.children[1], costs, costModel)
-      };
+      return makeBinary('*', extract(node.children[0]), extract(node.children[1]));
     case 'div':
-      return {
-        kind: 'binary',
-        operator: '/',
-        left: extractFromClass(egraph, node.children[0], costs, costModel),
-        right: extractFromClass(egraph, node.children[1], costs, costModel)
-      };
+      return makeBinary('/', extract(node.children[0]), extract(node.children[1]));
     case 'pow':
-      return {
-        kind: 'binary',
-        operator: '^',
-        left: extractFromClass(egraph, node.children[0], costs, costModel),
-        right: extractFromClass(egraph, node.children[1], costs, costModel)
-      };
+      return makeBinary('^', extract(node.children[0]), extract(node.children[1]));
     case 'neg':
-      return {
-        kind: 'unary',
-        operator: '-',
-        operand: extractFromClass(egraph, node.child, costs, costModel)
-      };
+      return makeUnary('-', extract(node.child));
     case 'inv':
-      // inv(x) extracts as 1/x
-      return {
-        kind: 'binary',
-        operator: '/',
-        left: { kind: 'number', value: 1 },
-        right: extractFromClass(egraph, node.child, costs, costModel)
-      };
+      // inv(x) extracts as 1/x (with constant folding)
+      return makeBinary('/', { kind: 'number', value: 1 }, extract(node.child));
     case 'call':
       return {
         kind: 'call',
         name: node.name,
-        args: node.children.map(id => extractFromClass(egraph, id, costs, costModel))
+        args: node.children.map(id => extract(id))
       };
     case 'component':
       return {
         kind: 'component',
-        object: extractFromClass(egraph, node.object, costs, costModel),
+        object: extract(node.object),
         component: node.field
       };
   }
@@ -485,54 +492,20 @@ function nodeToExpressionWithTemps(
     case 'var':
       return { kind: 'variable', name: node.name };
     case 'add':
-      return {
-        kind: 'binary',
-        operator: '+',
-        left: extract(node.children[0]),
-        right: extract(node.children[1])
-      };
+      return makeBinary('+', extract(node.children[0]), extract(node.children[1]));
     case 'sub':
-      return {
-        kind: 'binary',
-        operator: '-',
-        left: extract(node.children[0]),
-        right: extract(node.children[1])
-      };
+      return makeBinary('-', extract(node.children[0]), extract(node.children[1]));
     case 'mul':
-      return {
-        kind: 'binary',
-        operator: '*',
-        left: extract(node.children[0]),
-        right: extract(node.children[1])
-      };
+      return makeBinary('*', extract(node.children[0]), extract(node.children[1]));
     case 'div':
-      return {
-        kind: 'binary',
-        operator: '/',
-        left: extract(node.children[0]),
-        right: extract(node.children[1])
-      };
+      return makeBinary('/', extract(node.children[0]), extract(node.children[1]));
     case 'pow':
-      return {
-        kind: 'binary',
-        operator: '^',
-        left: extract(node.children[0]),
-        right: extract(node.children[1])
-      };
+      return makeBinary('^', extract(node.children[0]), extract(node.children[1]));
     case 'neg':
-      return {
-        kind: 'unary',
-        operator: '-',
-        operand: extract(node.child)
-      };
+      return makeUnary('-', extract(node.child));
     case 'inv':
-      // inv(x) extracts as 1/x
-      return {
-        kind: 'binary',
-        operator: '/',
-        left: { kind: 'number', value: 1 },
-        right: extract(node.child)
-      };
+      // inv(x) extracts as 1/x (with constant folding)
+      return makeBinary('/', { kind: 'number', value: 1 }, extract(node.child));
     case 'call':
       return {
         kind: 'call',

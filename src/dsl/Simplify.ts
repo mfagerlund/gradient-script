@@ -460,3 +460,42 @@ export function simplifyGradients(
 
   return simplified;
 }
+
+/**
+ * Post-CSE simplification: applies rules that were intentionally skipped during
+ * initial simplification to avoid interfering with CSE.
+ *
+ * Specifically: a + a → 2 * a (now safe because CSE has already extracted temps)
+ */
+export function simplifyPostCSE(expr: Expression): Expression {
+  return new PostCSESimplifier().transform(expr);
+}
+
+class PostCSESimplifier extends ExpressionTransformer {
+  protected visitBinaryOp(expr: BinaryOp): Expression {
+    const left = this.transform(expr.left);
+    const right = this.transform(expr.right);
+
+    // a + a → 2 * a
+    if (expr.operator === '+' && expressionsEqual(left, right)) {
+      return {
+        kind: 'binary',
+        operator: '*',
+        left: { kind: 'number', value: 2 },
+        right: left
+      };
+    }
+
+    // Return simplified if no changes
+    if (left === expr.left && right === expr.right) {
+      return expr;
+    }
+
+    return {
+      kind: 'binary',
+      operator: expr.operator,
+      left,
+      right
+    };
+  }
+}

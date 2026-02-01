@@ -16,7 +16,7 @@ import {
 } from './AST.js';
 import { Type, Types, TypeEnv } from './Types.js';
 import { GradientResult, StructuredGradient } from './Differentiation.js';
-import { simplifyGradients } from './Simplify.js';
+import { simplifyGradients, simplifyPostCSE } from './Simplify.js';
 import { ExpressionTransformer } from './ExpressionTransformer.js';
 import { eliminateCommonSubexpressionsStructured, eliminateCommonSubexpressions, eliminateCommonSubexpressionsGlobal } from './CSE.js';
 import { optimizeWithEGraph } from './egraph/index.js';
@@ -497,6 +497,19 @@ export function generateGradientFunction(
       const gradient = gradientsToUse.gradients.get(paramName);
       if (gradient && isStructuredGradient(gradient)) {
         gradient.components = simplifiedComponents;
+      }
+    }
+
+    // Post-CSE simplification: apply rules that were skipped to avoid CSE interference
+    // Specifically: a + a → 2 * a (now safe because temps have been extracted)
+    for (const [varName, expr] of cseIntermediates) {
+      cseIntermediates.set(varName, simplifyPostCSE(expr));
+    }
+    for (const [paramName, gradient] of gradientsToUse.gradients.entries()) {
+      if (isStructuredGradient(gradient)) {
+        for (const [comp, expr] of gradient.components.entries()) {
+          gradient.components.set(comp, simplifyPostCSE(expr));
+        }
       }
     }
   }

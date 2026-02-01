@@ -26,6 +26,7 @@ export interface SaturationStats {
 export interface SaturationOptions {
   maxIterations?: number;    // Default: 30
   maxClassSize?: number;     // Stop if e-graph gets too large
+  maxMatchesPerIter?: number; // Max matches per iteration (default: 10000)
   verbose?: boolean;         // Log progress
 }
 
@@ -43,8 +44,9 @@ export function saturate(
   options: SaturationOptions = {}
 ): SaturationStats {
   const {
-    maxIterations = 30,
-    maxClassSize = 10000,
+    maxIterations = 10,
+    maxClassSize = 5000,
+    maxMatchesPerIter = 5000,
     verbose = false
   } = options;
 
@@ -67,8 +69,8 @@ export function saturate(
       break;
     }
 
-    // Collect all rule matches
-    const matches = collectMatches(egraph, rules);
+    // Collect all rule matches (with limit)
+    const matches = collectMatches(egraph, rules, maxMatchesPerIter);
     stats.totalMatches += matches.length;
 
     if (matches.length === 0) {
@@ -124,7 +126,7 @@ interface Match {
 /**
  * Collect all rule matches across the e-graph
  */
-function collectMatches(egraph: EGraph, rules: Rule[]): Match[] {
+function collectMatches(egraph: EGraph, rules: Rule[], maxMatches: number): Match[] {
   const matches: Match[] = [];
 
   for (const classId of egraph.getClassIds()) {
@@ -132,6 +134,10 @@ function collectMatches(egraph: EGraph, rules: Rule[]): Match[] {
       const substs = matchPattern(egraph, rule.lhs, classId);
       for (const subst of substs) {
         matches.push({ rule, classId, subst });
+        if (matches.length >= maxMatches) {
+          // Hit limit - return what we have (prevents explosion)
+          return matches;
+        }
       }
     }
   }
@@ -143,7 +149,7 @@ function collectMatches(egraph: EGraph, rules: Rule[]): Match[] {
  * Apply a single rule once, returning number of merges
  */
 export function applyRuleOnce(egraph: EGraph, rule: Rule): number {
-  const matches = collectMatches(egraph, [rule]);
+  const matches = collectMatches(egraph, [rule], 5000);
   let merges = 0;
 
   for (const { classId, subst } of matches) {

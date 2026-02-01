@@ -145,6 +145,9 @@ function tokenize(input: string): string[] {
   return tokens;
 }
 
+/** Maximum substitutions to return from a single match (prevents explosion) */
+const MAX_SUBSTITUTIONS = 100;
+
 /**
  * Match a pattern against an e-class, returning all valid substitutions
  */
@@ -153,15 +156,23 @@ export function matchPattern(
   pattern: Pattern,
   classId: EClassId
 ): Substitution[] {
-  return matchPatternWithSubst(egraph, pattern, classId, new Map());
+  const results = matchPatternWithSubst(egraph, pattern, classId, new Map(), 0);
+  return results.slice(0, MAX_SUBSTITUTIONS);
 }
+
+const MAX_MATCH_DEPTH = 50;
 
 function matchPatternWithSubst(
   egraph: EGraph,
   pattern: Pattern,
   classId: EClassId,
-  subst: Substitution
+  subst: Substitution,
+  depth: number
 ): Substitution[] {
+  if (depth > MAX_MATCH_DEPTH) {
+    return []; // Prevent infinite recursion
+  }
+
   const canonId = egraph.find(classId);
 
   // Pattern variable - bind or check existing binding
@@ -185,8 +196,12 @@ function matchPatternWithSubst(
   const results: Substitution[] = [];
 
   for (const node of nodes) {
-    const matches = matchNodeWithPattern(egraph, pattern, node, subst);
-    results.push(...matches);
+    if (results.length >= MAX_SUBSTITUTIONS) break;
+    const matches = matchNodeWithPattern(egraph, pattern, node, subst, depth);
+    for (const m of matches) {
+      results.push(m);
+      if (results.length >= MAX_SUBSTITUTIONS) break;
+    }
   }
 
   return results;
@@ -196,7 +211,8 @@ function matchNodeWithPattern(
   egraph: EGraph,
   pattern: Pattern,
   node: ENode,
-  subst: Substitution
+  subst: Substitution,
+  depth: number
 ): Substitution[] {
   switch (pattern.tag) {
     case 'pvar':
@@ -211,43 +227,43 @@ function matchNodeWithPattern(
 
     case 'padd':
       if (node.tag === 'add') {
-        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst);
+        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst, depth);
       }
       return [];
 
     case 'pmul':
       if (node.tag === 'mul') {
-        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst);
+        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst, depth);
       }
       return [];
 
     case 'psub':
       if (node.tag === 'sub') {
-        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst);
+        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst, depth);
       }
       return [];
 
     case 'pdiv':
       if (node.tag === 'div') {
-        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst);
+        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst, depth);
       }
       return [];
 
     case 'ppow':
       if (node.tag === 'pow') {
-        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst);
+        return matchBinaryChildren(egraph, pattern.left, pattern.right, node.children, subst, depth);
       }
       return [];
 
     case 'pneg':
       if (node.tag === 'neg') {
-        return matchPatternWithSubst(egraph, pattern.child, node.child, subst);
+        return matchPatternWithSubst(egraph, pattern.child, node.child, subst, depth + 1);
       }
       return [];
 
     case 'pcall':
       if (node.tag === 'call' && node.name === pattern.name && node.children.length === pattern.args.length) {
-        return matchCallChildren(egraph, pattern.args, node.children, subst);
+        return matchCallChildren(egraph, pattern.args, node.children, subst, depth);
       }
       return [];
   }
@@ -258,15 +274,20 @@ function matchBinaryChildren(
   leftPattern: Pattern,
   rightPattern: Pattern,
   children: [EClassId, EClassId],
-  subst: Substitution
+  subst: Substitution,
+  depth: number
 ): Substitution[] {
   const results: Substitution[] = [];
 
   // Match left, then right
-  const leftMatches = matchPatternWithSubst(egraph, leftPattern, children[0], subst);
+  const leftMatches = matchPatternWithSubst(egraph, leftPattern, children[0], subst, depth + 1);
   for (const leftSubst of leftMatches) {
-    const rightMatches = matchPatternWithSubst(egraph, rightPattern, children[1], leftSubst);
-    results.push(...rightMatches);
+    if (results.length >= MAX_SUBSTITUTIONS) break;
+    const rightMatches = matchPatternWithSubst(egraph, rightPattern, children[1], leftSubst, depth + 1);
+    for (const m of rightMatches) {
+      results.push(m);
+      if (results.length >= MAX_SUBSTITUTIONS) break;
+    }
   }
 
   return results;
@@ -276,18 +297,23 @@ function matchCallChildren(
   egraph: EGraph,
   patterns: Pattern[],
   children: EClassId[],
-  subst: Substitution
+  subst: Substitution,
+  depth: number
 ): Substitution[] {
   if (patterns.length === 0) {
     return [new Map(subst)];
   }
 
   const results: Substitution[] = [];
-  const firstMatches = matchPatternWithSubst(egraph, patterns[0], children[0], subst);
+  const firstMatches = matchPatternWithSubst(egraph, patterns[0], children[0], subst, depth + 1);
 
   for (const firstSubst of firstMatches) {
-    const restMatches = matchCallChildren(egraph, patterns.slice(1), children.slice(1), firstSubst);
-    results.push(...restMatches);
+    if (results.length >= MAX_SUBSTITUTIONS) break;
+    const restMatches = matchCallChildren(egraph, patterns.slice(1), children.slice(1), firstSubst, depth + 1);
+    for (const m of restMatches) {
+      results.push(m);
+      if (results.length >= MAX_SUBSTITUTIONS) break;
+    }
   }
 
   return results;

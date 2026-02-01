@@ -2,7 +2,7 @@
  * E-Graph Optimizer for GradientScript
  *
  * Main entry point for e-graph-based optimization.
- * Replaces eliminateCommonSubexpressionsGlobal from CSE.ts
+ * Uses equality saturation for CSE and algebraic simplification.
  */
 
 import { Expression } from '../AST.js';

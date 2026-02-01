@@ -386,10 +386,143 @@ export function generateGradientFunction(
     }
   }
 
+  // Collect forward variable names and expressions for optimization
+  const forwardVars = new Set<string>();
+  const forwardVarExprs = new Map<string, Expression>();
+  for (const stmt of func.body) {
+    if (stmt.kind === 'assignment') {
+      forwardVars.add(stmt.variable);
+      forwardVarExprs.set(stmt.variable, stmt.expression);
+    }
+  }
+
+  // Optimize forward expressions with e-graph
+  let optimizedForwardExprs = forwardVarExprs;
+  let forwardCseTemps = new Map<string, Expression>();
+
+  if (options.cse !== false && forwardVarExprs.size > 0) {
+    const forOptimizer = new Map<string, Map<string, Expression>>();
+    forOptimizer.set('_forward', forwardVarExprs);
+    const forwardResult = optimizeWithEGraph(forOptimizer, { verbose: false });
+
+    // Rename forward temps to avoid conflicts with gradient temps (use _fwd prefix)
+    const rawTemps = forwardResult.intermediates;
+    const renameMap = new Map<string, string>();
+    for (const oldName of rawTemps.keys()) {
+      const newName = oldName.replace('_tmp', '_fwd');
+      renameMap.set(oldName, newName);
+    }
+
+    // Apply renaming to temp definitions
+    for (const [oldName, expr] of rawTemps) {
+      const newName = renameMap.get(oldName)!;
+      forwardCseTemps.set(newName, renameTempRefs(expr, renameMap));
+    }
+
+    // Apply renaming to optimized expressions
+    optimizedForwardExprs = new Map();
+    for (const [varName, expr] of (forwardResult.gradients.get('_forward') || forwardVarExprs)) {
+      optimizedForwardExprs.set(varName, renameTempRefs(expr, renameMap));
+    }
+  }
+
+  // Helper to rename temp references in an expression
+  function renameTempRefs(expr: Expression, renameMap: Map<string, string>): Expression {
+    if (expr.kind === 'variable') {
+      const newName = renameMap.get(expr.name);
+      return newName ? { kind: 'variable', name: newName } : expr;
+    } else if (expr.kind === 'binary') {
+      return {
+        kind: 'binary',
+        operator: expr.operator,
+        left: renameTempRefs(expr.left, renameMap),
+        right: renameTempRefs(expr.right, renameMap)
+      };
+    } else if (expr.kind === 'unary') {
+      return {
+        kind: 'unary',
+        operator: expr.operator,
+        operand: renameTempRefs(expr.operand, renameMap)
+      };
+    } else if (expr.kind === 'call') {
+      return {
+        kind: 'call',
+        name: expr.name,
+        args: expr.args.map(a => renameTempRefs(a, renameMap))
+      };
+    } else if (expr.kind === 'component') {
+      return {
+        kind: 'component',
+        object: renameTempRefs(expr.object, renameMap),
+        component: expr.component
+      };
+    }
+    return expr;
+  }
+
+  // Helper to find which forward vars an expression depends on
+  function findForwardVarDeps(expr: Expression): Set<string> {
+    const deps = new Set<string>();
+    function visit(e: Expression): void {
+      if (e.kind === 'variable' && forwardVars.has(e.name)) {
+        deps.add(e.name);
+      } else if (e.kind === 'binary') {
+        visit(e.left);
+        visit(e.right);
+      } else if (e.kind === 'unary') {
+        visit(e.operand);
+      } else if (e.kind === 'call') {
+        e.args.forEach(visit);
+      } else if (e.kind === 'component') {
+        visit(e.object);
+      }
+    }
+    visit(expr);
+    return deps;
+  }
+
+  // Track which CSE temps need to be emitted after which forward var
+  const fwdTempAfterVar = new Map<string, Array<{ name: string; expr: Expression }>>();
+  const fwdTempsBeforeAny: Array<{ name: string; expr: Expression }> = [];
+
+  for (const [tempName, tempExpr] of forwardCseTemps) {
+    const deps = findForwardVarDeps(tempExpr);
+    if (deps.size === 0) {
+      fwdTempsBeforeAny.push({ name: tempName, expr: tempExpr });
+    } else {
+      let lastDep = '';
+      for (const stmt of func.body) {
+        if (stmt.kind === 'assignment' && deps.has(stmt.variable)) {
+          lastDep = stmt.variable;
+        }
+      }
+      if (lastDep) {
+        if (!fwdTempAfterVar.has(lastDep)) {
+          fwdTempAfterVar.set(lastDep, []);
+        }
+        fwdTempAfterVar.get(lastDep)!.push({ name: tempName, expr: tempExpr });
+      }
+    }
+  }
+
+  // Emit forward CSE temps that don't depend on forward vars
+  for (const { name: tempName, expr } of fwdTempsBeforeAny) {
+    const code = codegen.generate(expr);
+    if (format === 'typescript' || format === 'javascript') {
+      lines.push(`  const ${tempName} = ${code};`);
+    } else if (format === 'python') {
+      lines.push(`  ${tempName} = ${code}`);
+    } else if (format === 'csharp') {
+      lines.push(`    ${csharpFloatType} ${tempName} = ${code};`);
+    }
+  }
+
+  // Generate forward variable assignments with interleaved temps
   for (const stmt of func.body) {
     if (stmt.kind === 'assignment') {
       const varName = stmt.variable;
-      const generatedExpr = codegen.generate(stmt.expression);
+      const expr = optimizedForwardExprs.get(varName) || stmt.expression;
+      const generatedExpr = codegen.generate(expr);
 
       if (shouldTrackForForwardReuse(stmt.expression)) {
         // Register the original expression
@@ -399,8 +532,6 @@ export function generateGradientFunction(
         }
 
         // Also register the fully inlined form (this is what gradient expressions will have)
-        // Gradient expressions are computed after full inlining, so we need to match against
-        // the inlined form to enable forward expression reuse
         const inlinedExpr = inlineExpression(stmt.expression, substitutionMap);
         const inlinedKey = serializeExpression(inlinedExpr);
         if (inlinedKey !== exprKey && !forwardExpressionMap.has(inlinedKey)) {
@@ -414,6 +545,19 @@ export function generateGradientFunction(
         lines.push(`  ${varName} = ${generatedExpr}`);
       } else if (format === 'csharp') {
         lines.push(`    ${csharpFloatType} ${varName} = ${generatedExpr};`);
+      }
+
+      // Emit any forward CSE temps that depend on this var
+      const tempsForVar = fwdTempAfterVar.get(varName) || [];
+      for (const { name: tempName, expr: tempExpr } of tempsForVar) {
+        const tempCode = codegen.generate(tempExpr);
+        if (format === 'typescript' || format === 'javascript') {
+          lines.push(`  const ${tempName} = ${tempCode};`);
+        } else if (format === 'python') {
+          lines.push(`  ${tempName} = ${tempCode}`);
+        } else if (format === 'csharp') {
+          lines.push(`    ${csharpFloatType} ${tempName} = ${tempCode};`);
+        }
       }
     }
   }
